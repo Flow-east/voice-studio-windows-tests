@@ -1,0 +1,5 @@
+{
+  "src/managed-engine.js": "b0b54ce6f9c9d25b575a0bb3b4af0b85240710838dac60bbb0edbe9c630c9612",
+  "src/diagnostics.js": "1da0503b07fbb60a8a4ae222edd39ce44700ab62c291653fe083d092878ec392",
+  "test/managed-engine-state-cache.test.js": "171f9cedd085178a50824e8cb4605dad612dfa25300a4d95da4bb6289606d12d"
+}
