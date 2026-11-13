@@ -19,3 +19,18 @@ with tarfile.open(fileobj=io.BytesIO(data)) as archive:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(archive.extractfile(member).read())
 print('Verified public package 0.2.5; no install scripts executed.')
+
+# World regression tests validate packaged runtime/default-voice presence.
+# Materialize unchanged fixtures from the verified public tarball, rather than
+# weakening production prerequisites or uploading a second copy of media.
+import json
+import shutil
+fixtures = ['runtime/torch_speech.py', 'runtime/torch_transcribe.py', 'runtime/torch_reference.py', 'runtime/sing.py', 'assets/default-voice/metadata.json', 'assets/default-voice/reference.wav']
+hashes = json.loads(Path('candidate-package-source-hashes.json').read_text())
+for name in fixtures:
+    source = root / name
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == hashes[name]
+    target = Path('candidate-package') / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, target)
+print('Loaded unchanged public runtime/default-voice fixtures, hash verified.')
