@@ -14,7 +14,10 @@ process.stderr.on('error', () => {});
 if (leaf) writeFileSync(file('leaf.pid'), String(process.pid));
 if (mode === 'tree' || mode === 'exit-with-descendant') {
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'leaf', directory], {
-    stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true, shell: false,
+    stdio: mode === 'exit-with-descendant' ? 'ignore' : ['ignore', 'inherit', 'inherit'], windowsHide: true, shell: false,
+    // Only this orphan control must outlive the parent's libuv Job object.
+    // The leaf still obeys its own stop file and 15-second maximum lifetime.
+    detached: mode === 'exit-with-descendant',
   });
   child.unref();
 }

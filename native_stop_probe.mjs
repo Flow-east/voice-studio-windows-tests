@@ -94,6 +94,7 @@ async function runCase(facade, mode) {
     result.directClosedAtSettlement = directClosed;
     result.knownDescendantAliveAtSettlement = alive(leafPid);
     result.taskkillExitCode = taskkillCode;
+    if (mode === 'exit-with-descendant') assert(result.knownDescendantAliveAtSettlement, 'ORPHAN_CONTROL_NOT_ESTABLISHED');
     if (mode === 'tree') assert(!settled.terminationFailed && directClosed && !alive(leafPid), 'CONTROL_TREE_STOP_FAILED');
     if (mode === 'exit-clean' && settled.terminationFailed && directClosed) result.classification = 'parent-exit-race-without-descendants';
     else if (result.knownDescendantAliveAtSettlement) result.classification = 'known-descendant-still-alive';

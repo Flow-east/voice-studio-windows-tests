@@ -34,3 +34,8 @@ to taskkill; child fixtures also exit on a control file or after 15 seconds.
 These observations distinguish possible stop outcomes. They do not establish
 which occurred on a reporter's machine. Pausing stdout is an explicit test
 condition and must not be presented as behavior observed in the product.
+
+The surviving-descendant control uses a detached child with independent stdio
+and asserts it is alive at cancellation settlement. This prevents parent/pipe
+closure from being mistaken for proof that the whole process tree is gone.
+Node 24 is selected to match the reporter's runtime major version.
