@@ -1,17 +1,19 @@
-# Native Windows progress-cache tests
+# Native Windows preparation validation
 
-Synthetic reproduction of exclusive `setup-state.json` locks while the real
-managed-engine prepare/command lifecycle runs in a separate Node host.
-PowerShell holds FileShare.None through worker completion and preparation
-settlement; a tiny synthetic model fixture passes the actual marker/readiness
-checks. No model download, inference, user data, proxy settings, or credentials
-are used. The only baseline network fetch is the hash-pinned published npm
-0.2.5 tarball. Candidate source byte hashes are checked before tests.
+This branch validates the Windows memory-only progress change against an
+immutable hash-pinned public 0.2.6 baseline. The full preparation methods and
+Python model worker are unmodified. Test-only substitutions are a tiny valid
+ASR manifest, in-memory HTTP responses, and prevalidated environment markers.
+A real Python venv, production uv binary and locked imageio-ffmpeg are used.
+No actual model weights or inference libraries are downloaded.
 
-Scenarios compare the published baseline failure with successful preparation,
-post-unlock persistence recovery, retained worker checksum failure, and prompt
-cancellation. Existing startup, callback, diagnostics, and bounded-retry tests
-also run. Windows Server 2022 and 2025 are CI coverage, not a claim of testing
-the reporting user's Windows 10 machine.
+Final scenarios cover fast/slow transfers, partial resume, fallback, cache reuse
+and an independently held FileShare.None legacy state file throughout the real
+preparation. Candidate success must leave that legacy file untouched, create no
+state file in fresh roots, and obtain readiness from actual validated markers.
+Separate fault injection tests verify zero Windows state-file access and
+preservation of actual model/config/log failures.
 
-Historical harnesses remain in this repository for earlier releases.
+Node 24.21.0 and Python 3.11.9 run on Windows Server 2022 and 2025. This is not
+the reporting user's Windows 10/Python 3.11.13 machine or a full inference test.
+Historical harnesses are retained for audit; only the current workflow is run.

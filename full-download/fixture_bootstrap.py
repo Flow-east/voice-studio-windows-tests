@@ -1,5 +1,6 @@
 """Installed only in the test venv; replace external HTTP, never runtime logic."""
 import io
+import atexit
 import json
 from pathlib import Path
 import sys
@@ -10,6 +11,12 @@ import urllib.parse
 config = json.loads(Path(__file__).with_name('voice_fixture_config.json').read_text())
 sys.path.insert(0, config['runtime'])
 import model_download
+
+_requests = []
+def audit_requests():
+    if _requests:
+        Path(config['auditPath']).write_text(json.dumps(_requests))
+atexit.register(audit_requests)
 
 class Response(io.BytesIO):
     def __init__(self, body, offset, delay):
@@ -33,12 +40,12 @@ def request(url, headers):
         name = urllib.parse.unquote(parsed.path.split('/resolve/', 1)[1].split('/', 1)[1])
     assert name in config['files'], 'Unexpected model request'
     offset = int(headers['Range'][6:-1]) if headers.get('Range') else 0
-    print('FIXTURE_HTTP ' + json.dumps({'source':source,'file':name,'offset':offset}), file=sys.stderr, flush=True)
+    _requests.append({'source':source,'file':name,'offset':offset})
     if config['mode'] == 'fallback' and source == 'domestic':
         raise urllib.error.HTTPError(url, 503, 'fixture unavailable', {}, None)
     body = (Path(config['payloadRoot']) / name).read_bytes()
     assert 0 <= offset < len(body)
-    return Response(body, offset, 0.25 if config['mode'] in ('slow', 'partial') and name.endswith('.safetensors') else 0)
+    return Response(body, offset, 0.25 if config['mode'] in ('slow', 'partial', 'state-locked') and name.endswith('.safetensors') else 0)
 
 # This is the sole production callable replaced by the fixture.
 model_download._request = request

@@ -3,14 +3,22 @@ import {spawnSync} from 'node:child_process';
 import {readFileSync,writeFileSync,existsSync} from 'node:fs';
 const results=[],checks=[];
 const roles=[['published0.2.6','released-0.2.6'],...(existsSync('full-download-candidate/package.json')?[['candidate','full-download-candidate']]:[])];
-for(const[role,path]of roles)for(const mode of ['fast','slow','partial','fallback','cached']){
+for(const[role,path]of roles)for(const mode of process.argv.includes('--final')&&role==='published0.2.6'?['partial']:(process.argv.includes('--final')?['fast','slow','partial','fallback','cached','state-locked']:['fast','slow','partial','fallback','cached'])){
  const label=role+' '+mode;
  try{
   const host=spawnSync(process.execPath,['full-download/host.mjs',path,mode],{encoding:'utf8',timeout:90000,maxBuffer:4*1024*1024});
   assert.equal(host.error,undefined);assert.equal(host.status,0,host.stderr);
   const result={role,...JSON.parse(host.stdout.trim())};results.push(result);
   assert.equal(result.fulfilled,true);assert.equal(result.ready,true);assert.equal(result.state,'ready');assert.equal(result.status,'ready');assert.equal(result.warning,null);
+  if(mode==='state-locked'){
+   assert.equal(result.realExclusiveStateLock,true);assert.equal(result.lockHeldAtSettlement,true);assert.equal(result.lockReleased,true);assert.equal(result.warningAfterUnlock,null);assert.equal(result.warningAfterLockedFlush,null);
+   assert.equal(result.savedStateAfterUnlock,'missing');assert.equal(result.legacyFileBytesUnchanged,true);assert.equal(result.writerCleanAfterUnlock,true);assert.equal(result.restartedReadyWhileStateLocked,true);assert.equal(result.restartedMemoryStateKeys,0);
+   assert.equal(result.stateBeforePrepare,result.stateAfterLockedFlush);assert.equal(result.stateBeforePrepare,result.stateAfterUnlockFlush);
+  }
+  if(process.argv.includes('--final')&&role==='candidate'){assert.equal(result.stateBeforePrepare,result.stateAfterPrepare);assert.equal(result.stateFileExistsAfterPrepare,mode==='state-locked');}
+
   assert.equal(result.terminationFailed,false);assert.equal(result.filesValid,true);assert.equal(result.markerCreated,true);assert.equal(result.modelPreparationReadyMessage,true);
+  if(process.argv.includes('--final')&&role==='candidate'){assert.equal(result.modelStateCheckpoint.atSpawn,result.modelStateCheckpoint.atClose,'State file must stay unchanged while model worker is active');}
   assert.equal(result.childCount,result.closedCount);assert.ok(result.pythonExitCodes.every(code=>code===0));assert.equal(result.pending,false);assert.equal(result.timer,false);
   if(mode==='partial')assert.ok(result.requests.some(r=>r.offset===384*1024));
   if(mode==='fallback'){assert.ok(result.progress.some(p=>p.phase==='switching'&&p.source==='overseas'));assert.ok(result.requests.some(r=>r.source==='overseas'));}

@@ -152,7 +152,7 @@ export class ManagedEngine {
     this.runtimeProfile = this.profile.id;
     this.networkResolver = networkResolver; this.spawnProcess = spawnProcess; this.parentEnv = parentEnv; this.terminateTree = terminateTree; this.signalProcess = signalProcess; this.terminationFailed = false; this.terminationFailure = null;
     this.busy = null; this.child = null; this.controller = null; this.cancelTimer = null; this.lastStateWrite = 0;
-    this.statePersistenceWarning = null; this.stateRetryAt = 0; this.stateMetadataDetails = new WeakMap();
+    this.statePersistenceWarning = null; this.stateRetryAt = 0;
     this.stateWriter = new RetryingFileWriter({ fileRole: 'engine-state', platform: this.platform, onError: error => {
       if (this.recoverableStateFailure(error)) this.warnStatePersistence(error);
       else this.fileWriteFailure?.(error);
@@ -162,7 +162,10 @@ export class ManagedEngine {
     const runtime = read(join(this.root, 'runtime-profile.json'));
     this.runtimeDetected = this.profile.id === 'windows-x64' && runtime?.schema === 1 && ['windows-x64', 'windows-cuda'].includes(runtime.profile);
     if (this.runtimeDetected) this.runtimeProfile = runtime.profile;
-    this.state = read(join(this.root, 'setup-state.json')) ?? {};
+    // Windows progress belongs to this process. Readiness and download resume
+    // are independently verified from model/environment files, while automatic
+    // restart policy lives in voice-setup.json. Legacy UI snapshots stay unused.
+    this.state = this.platform === 'win32' ? {} : read(join(this.root, 'setup-state.json')) ?? {};
     for (const kind of ['speech', 'transcription', 'singing', 'reference']) if (this.state[kind]?.state === 'preparing') this.state[kind] = { state: 'missing', stage: '上次准备已中断，可以重新开始' };
   }
   python(kind) { return join(this.root, kind + '-env', this.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'); }
@@ -247,25 +250,20 @@ export class ManagedEngine {
     for (const kind of affected) next[kind] = { state: 'missing', stage: '所需模型已移除，需要时重新准备' };
     // Storage owns file deletion. This method only resets state after that
     // operation and must not follow or alter external singing model locations.
-    try { save(join(this.root, 'setup-state.json'), next); } catch (error) { throw fileOperationError(error, 'engine-state'); }
+    if (this.platform !== 'win32') {
+      try { save(join(this.root, 'setup-state.json'), next); } catch (error) { throw fileOperationError(error, 'engine-state'); }
+    }
     this.state = next;
     return { ok: true, models, components: [...affected] };
   }
   recoverableStateFailure(error) {
+    if (this.platform === 'win32') return false;
     if (error?.fileRole !== 'engine-state' || !this.stateWriter.isRetryable(error)) return false;
     // A sharing conflict on this reconstructible UI cache must not stop the
     // real model operation. Invalid targets and other filesystem errors still
     // fail normally; model/config/ready-marker writes never use this path.
     try { if (!lstatSync(join(this.root, 'setup-state.json')).isFile()) return false; }
-    catch (failure) {
-      if (failure?.code === 'ENOENT') return true;
-      // Metadata may be unavailable under the same Windows sharing conflict.
-      // A failed auxiliary probe is not evidence that the cache is a directory
-      // or link. Only an already-recoverable rename may take this path; actual
-      // write permissions, full disks and unexpected errors remain strict.
-      if (error?.syscall !== 'rename' || !['EBUSY', 'EPERM', 'EACCES'].includes(failure?.code)) return false;
-      this.stateMetadataDetails.set(error, diagnose(fileOperationError(failure, 'engine-state')).details);
-    }
+    catch (failure) { if (failure?.code !== 'ENOENT') return false; }
     return true;
   }
   warnStatePersistence(error) {
@@ -274,16 +272,16 @@ export class ManagedEngine {
       code: 'STATE_PERSISTENCE_DEGRADED',
       message: '准备进度暂时无法保存；当前模型状态仍会实时更新，重启后会重新检查模型完整性。',
       details: diagnose(error).details,
-      metadataDetails: [...new Set([...(this.statePersistenceWarning?.metadataDetails ?? []), ...(this.stateMetadataDetails.get(error) ?? [])])].slice(0, 32),
       since: this.statePersistenceWarning?.since ?? now, lastFailureAt: now,
     };
     this.stateRetryAt = now + 1000;
   }
   statePersistenceStatus() {
     const warning = this.statePersistenceWarning;
-    return warning ? { ...warning, details: [...warning.details], metadataDetails: [...warning.metadataDetails] } : null;
+    return warning ? { ...warning, details: [...warning.details] } : null;
   }
   persistState(throttled = false, force = false) {
+    if (this.platform === 'win32') return;
     const now = Date.now();
     if (this.stateWriter.error && this.recoverableStateFailure(this.stateWriter.error)) {
       // RetryingFileWriter intentionally retains terminal errors for strict
@@ -301,6 +299,7 @@ export class ManagedEngine {
     }); this.lastStateWrite = now;
   }
   async flushState({ signal, retry = false, ignoreCancelled = false } = {}) {
+    if (this.platform === 'win32') return;
     if (retry) {
       if (signal?.aborted && this.stateWriter.error?.code === 'USER_CANCELLED') this.stateWriter.reset();
       this.persistState(false, true);

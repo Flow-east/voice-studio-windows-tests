@@ -31,4 +31,4 @@ jobs:
         run: python full-download/prepare_tools.py
       - name: Exercise unmodified model preparation with fixture HTTP only
         shell: pwsh
-        run: node full-download/suite.mjs
+        run: node full-download/suite.mjs --final
