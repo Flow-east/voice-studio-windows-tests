@@ -13,7 +13,7 @@
   "src/qq-inbox.js": "7d27540ca7d52d5fb657ac6d7e577e0e04422c3f9d8c30b9b959d36f4144a5af",
   "src/config.js": "9b114c45903e2fb3c284627aa53e1e42c1089cecfc832d0f45f99a822a97b034",
   "src/diagnostic-context.js": "2564c8eeafbe01f991e71d22897c6d39dd0c6afccf6b5beea70ddcb013ad0a41",
-  "src/windows-job.js": "2c668989b7ec318964413561ebb869177dc94d20f643462053f8952282ce2446",
+  "src/windows-job.js": "0d38b1c0bbbf1cf3ba3b4e2205dc7543779b813067137b64d8b0870ba987cd77",
   "src/installer-config.js": "e6d2bd1be7b24c435a1e9288e40ed259bfd38ec205ebe3435b0b845cb0ef1f38",
   "src/default-voice.js": "7e5d3efb1b7edebb240e1dc4dba13204b5e82262bf628b5b11c771500059d394",
   "src/player.js": "ccdd1f19770f0bb3136f774149ff506dfcd4dcfd553f959dbd98e3d55bed2fc6",
@@ -24,7 +24,7 @@
   "src/process.js": "02137cb70579fe6d479eacea1adc5d5e49a8bbe391410bb9e6050716d7d4e813",
   "src/storage.js": "23f03e52621f49ddf1b09c97fe61b3c07778f4fe48bd264b686e4bd9c7c4021a",
   "src/singing-reference.js": "9466b464ac2d9140cc79ff7e93611a81bf2fa05957eb40fcd746ca2a303b8f1c",
-  "runtime/windows-job.ps1": "ce164da6fd31b6e26c396bb1b3fe996b70d95ebc52512d02d8dfdf6fdb1fc82b",
+  "runtime/windows-job.ps1": "44ae5a70378badf7465fe8ae79d4d0faa3f5800a5867d089157eb908ef38eb59",
   "package.json": "3f664bf65e8aa442ee66e82dd359062413e7eb32bfee3dc38a894422b7378f05",
   "runtime/model-files.json": "cc1f92427d57eedf2ed74b6c9d28424e6beab658cde322c056a928d01fe84466",
   "runtime/model-files-torch.json": "35a524150f2e5128abcdf5908c8ca479410fd9722d5ccf7e279958c121754b38"

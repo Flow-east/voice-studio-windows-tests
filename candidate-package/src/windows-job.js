@@ -28,8 +28,8 @@ export function spawnWindowsJob(executable, args, options, { spawnProcess, power
   const nonce = randomBytes(24).toString('hex'), prefix = `STUDIO_JOB_${nonce} `;
   const environment = Object.fromEntries(Object.entries(options.env ?? process.env).filter(([key]) => !key.toUpperCase().startsWith('VOICE_STUDIO_JOB_') && key.toUpperCase() !== 'PSMODULEPATH'));
   // A private environment omits PowerShell's module path. Implicit discovery
-  // can stall on absent user/program-files locations; load only OS modules
-  // beside the already resolved Windows PowerShell executable.
+  // can stall on absent user/program-files locations. Set the OS module path
+  // here and again in the script, because PowerShell rebuilds it at startup.
   environment.PSMODULEPATH = win32.join(win32.dirname(powershell), 'Modules');
   environment.VOICE_STUDIO_JOB_SPEC = Buffer.from(JSON.stringify({ executable, args, cwd: options.cwd ?? process.cwd(), nonce }), 'utf8').toString('base64');
   const raw = spawnProcess(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', script()], {
