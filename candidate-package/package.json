@@ -1,0 +1,66 @@
+{
+  "name": "cortico-world-local-voice-studio",
+  "version": "0.2.3",
+  "description": "大肥鱼语音助手：配合 Coopanion 官方 QQ 插件使用，通过本地模型识别 QQ 语音、发送语音回复、生成唱歌语音。支持参考音色、演唱参考和自然语言演唱描述，模型按需下载和加载。",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "assets",
+    "src",
+    "dist",
+    "runtime",
+    "describe.json",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "describe": "node test/export-describe.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "os": [
+    "darwin",
+    "win32"
+  ],
+  "cpu": [
+    "arm64",
+    "x64"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "ws": "8.21.1"
+  },
+  "keywords": [
+    "cortico-world",
+    "大肥鱼语音助手",
+    "大肥鱼",
+    "qq",
+    "singing",
+    "voice",
+    "creative",
+    "local"
+  ],
+  "cortico": {
+    "kind": "world",
+    "api": 6,
+    "displayName": "大肥鱼语音助手",
+    "tags": [
+      "voice",
+      "im",
+      "qq",
+      "creative",
+      "local"
+    ],
+    "webUiClient": "dist/webui.js",
+    "describe": "describe.json"
+  },
+  "author": {
+    "name": "抖音博主 水流东"
+  }
+}
