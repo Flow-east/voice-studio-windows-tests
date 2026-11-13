@@ -6,7 +6,7 @@ weights, or personal filesystem paths.
 
 ## Current file-sharing recovery candidate (unpublished)
 
-The `windows-busy.yml` manual workflow compares the hash-pinned public 0.2.4
+The `windows.yml` manual workflow compares the hash-pinned public 0.2.4
 archive with a candidate that retries temporary setup-log and progress-state
 sharing conflicts without blocking the host event loop. Separate PowerShell
 processes hold real exclusive Windows file handles. Tests check both transient

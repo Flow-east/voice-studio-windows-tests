@@ -1,17 +1,17 @@
-name: Windows startup crash regression
+name: Windows busy file regression
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  native-host-regression:
-    name: Host survival (${{ matrix.os }})
+  busy-file-regression:
+    name: File lock recovery (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 8
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -22,7 +22,7 @@ jobs:
           package-manager-cache: false
       - name: Load hash-pinned published baseline
         shell: pwsh
-        run: python load_released_package.py
-      - name: Verify host survival and cold startup
+        run: python load_busy_baseline.py
+      - name: Verify native file lock recovery and regressions
         shell: pwsh
-        run: node ci_startup_tests.mjs
+        run: node ci_busy_tests.mjs
