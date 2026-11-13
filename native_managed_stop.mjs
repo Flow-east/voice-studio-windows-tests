@@ -68,9 +68,11 @@ async function scenario(label) {
     row.commandResult = await bounded(current.work);
     if (label === 'normal-exit-zero') {
       const values = ['中文 空格', 'double"quote', 'C:\\trailing path\\', '$(literal); & data'];
-      const actual = await engine.command(process.execPath, ['-e', 'console.log(JSON.stringify(process.argv.slice(1)))', ...values], { capture: true, timeoutMs: 15000 });
-      row.argumentRoundTrip = JSON.stringify(JSON.parse(actual.trim())) === JSON.stringify(values);
-      if (!row.argumentRoundTrip) throw Error('PROBE_ARGUMENT_MISMATCH');
+      const actual = await engine.command(process.execPath, ['-e', 'console.log(JSON.stringify({args:process.argv.slice(1),controls:Object.keys(process.env).filter(k=>k.startsWith("VOICE_STUDIO_JOB_"))}))', ...values], { capture: true, timeoutMs: 15000 });
+      const roundTrip = JSON.parse(actual.trim());
+      row.argumentRoundTrip = JSON.stringify(roundTrip.args) === JSON.stringify(values);
+      row.privateControlStripped = Array.isArray(roundTrip.controls) && roundTrip.controls.length === 0;
+      if (!row.argumentRoundTrip || !row.privateControlStripped) throw Error('PROBE_ARGUMENT_MISMATCH');
     }
 
     row.terminationGuardAfterFirst = engine.terminationFailed;

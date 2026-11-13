@@ -5,14 +5,14 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const [mode, directory] = process.argv.slice(2);
-if (!directory || !['tree', 'exit-clean', 'exit-with-descendant', 'paused-stdio', 'exit-with-independent-descendant', 'supervisor-killed', 'leaf'].includes(mode)) process.exit(2);
+if (!directory || !['tree', 'exit-clean', 'exit-with-descendant', 'paused-stdio', 'exit-with-independent-descendant', 'supervisor-killed', 'supervisor-stdin-eof', 'leaf'].includes(mode)) process.exit(2);
 const file = name => join(directory, name);
 const leaf = mode === 'leaf';
 process.on('uncaughtException', () => process.exit(3));
 process.stdout.on('error', () => {});
 process.stderr.on('error', () => {});
 writeFileSync(file(leaf ? 'leaf.pid' : 'parent.pid'), String(process.pid));
-if (mode === 'tree' || mode === 'exit-with-descendant' || mode === 'exit-with-independent-descendant' || mode === 'supervisor-killed') {
+if (mode === 'tree' || mode === 'exit-with-descendant' || mode === 'exit-with-independent-descendant' || mode === 'supervisor-killed' || mode === 'supervisor-stdin-eof') {
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'leaf', directory], {
     stdio: mode === 'exit-with-independent-descendant' ? 'ignore' : ['ignore', 'inherit', 'inherit'], windowsHide: true, shell: false,
     // Only this orphan control must outlive the parent's libuv Job object.

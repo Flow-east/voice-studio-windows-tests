@@ -13,7 +13,7 @@
   "src/qq-inbox.js": "7d27540ca7d52d5fb657ac6d7e577e0e04422c3f9d8c30b9b959d36f4144a5af",
   "src/config.js": "9b114c45903e2fb3c284627aa53e1e42c1089cecfc832d0f45f99a822a97b034",
   "src/diagnostic-context.js": "2564c8eeafbe01f991e71d22897c6d39dd0c6afccf6b5beea70ddcb013ad0a41",
-  "src/windows-job.js": "9f393d67412f2f0e86162faeb628a1afddd9dd1cc89f9ed2c1b07bd67f55d7a0",
+  "src/windows-job.js": "2c668989b7ec318964413561ebb869177dc94d20f643462053f8952282ce2446",
   "src/installer-config.js": "e6d2bd1be7b24c435a1e9288e40ed259bfd38ec205ebe3435b0b845cb0ef1f38",
   "src/default-voice.js": "7e5d3efb1b7edebb240e1dc4dba13204b5e82262bf628b5b11c771500059d394",
   "src/player.js": "ccdd1f19770f0bb3136f774149ff506dfcd4dcfd553f959dbd98e3d55bed2fc6",

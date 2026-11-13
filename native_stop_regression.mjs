@@ -35,6 +35,7 @@ async function runCase(mode) {
   const readPid = name => { const file = join(directory, name + '.pid'); return existsSync(file) ? Number(readFileSync(file, 'utf8')) : null; };
   const records = { mode, passed: false, controlledProcessesOnly: true };
   let native, running, nativeSpawned = false, directExited = false, directClosed = false, parentPid, leafPid;
+  let operationSettled = false, operationResult, operationRejection, eofStarted;
   const spawned = new Set();
   const spawnProcess = (executable, args, options) => {
     const killer = basename(executable).toLowerCase() === 'taskkill.exe';
@@ -62,17 +63,36 @@ async function runCase(mode) {
     running = runProcess({ pythonPath: missing ? join(directory, 'definitely-missing.exe') : process.execPath,
       runnerPath: fixture, args: [mode, directory], logPath: join(directory, 'worker.log'), timeoutMs: 12000 },
       { spawnProcess, ...(role === 'candidate' ? { windowsJob: true } : {}) });
+    const observedWork = running.promise.then(result => {
+      operationSettled = true; operationResult = result; return result;
+    }, error => {
+      operationSettled = true; operationRejection = { name: error.name, ...safe(error) };
+      operationResult = { code: null, ...safe(error) }; return operationResult;
+    });
+    const ready = async name => {
+      await until(() => existsSync(join(directory, name + '.ready')) || operationSettled);
+      if (!existsSync(join(directory, name + '.ready'))) {
+        records.result = safe(operationResult); records.settledBeforeFixtureReady = name;
+        if (operationRejection) records.promiseRejected = operationRejection;
+        mark('operation-settled-before-ready', safe(operationResult));
+        throw Error('PROBE_BUSINESS_NOT_STARTED');
+      }
+    };
     if (missing) { mark('cancel-after-real-spawn-attempt'); running.cancel(); }
     else {
-      await until(() => existsSync(join(directory, 'parent.ready')));
+      await ready('parent');
       parentPid = readPid('parent');
       assert(Number.isSafeInteger(parentPid) && parentPid > 0 && parentPid !== process.pid);
-      if (mode === 'tree' || mode === 'exit-with-independent-descendant' || mode === 'supervisor-killed') {
-        await until(() => existsSync(join(directory, 'leaf.ready')));
+      if (mode === 'tree' || mode === 'exit-with-independent-descendant' || mode === 'supervisor-killed' || mode === 'supervisor-stdin-eof') {
+        await ready('leaf');
         leafPid = readPid('leaf');
         assert(Number.isSafeInteger(leafPid) && leafPid > 0 && leafPid !== process.pid);
       }
-      if (mode === 'supervisor-killed') {
+      if (mode === 'supervisor-stdin-eof') {
+        assert(native && native.pid !== parentPid && native.stdin?.writable, 'PROBE_WRITABLE_SUPERVISOR_STDIN_REQUIRED');
+        records.cancelSent = false; records.supervisorStdinEnded = true;
+        eofStarted = Date.now(); mark('end-supervisor-stdin-without-cancel'); native.stdin.end();
+      } else if (mode === 'supervisor-killed') {
         assert(native && native.pid !== parentPid, 'PROBE_SUPERVISOR_MUST_DIFFER_FROM_WORKER');
         mark('force-kill-owned-supervisor'); native.kill('SIGKILL');
       } else if (mode === 'tree') { mark('cancel-live-tree'); running.cancel(); }
@@ -86,8 +106,11 @@ async function runCase(mode) {
         }
       }
     }
-    const result = await bounded(running.promise);
+    // EOF must resolve before the fixture's 15-second lifespan or the task's
+    // 12-second timeout could make an ignored EOF look like successful cleanup.
+    const result = await bounded(observedWork, mode === 'supervisor-stdin-eof' ? 8000 : 20000);
     records.result = safe(result);
+    if (operationRejection) { records.promiseRejected = operationRejection; throw Error('PROBE_PROMISE_REJECTED'); }
     records.businessParentAliveAtSettlement = alive(parentPid);
     records.independentDescendantAliveAtSettlement = alive(leafPid);
     records.returnedChildExitedAtSettlement = directExited;
@@ -95,6 +118,10 @@ async function runCase(mode) {
     records.returnedChildAliveAtSettlement = nativeSpawned && alive(native?.pid);
     records.passed = !result.terminationFailed && !alive(parentPid) && !alive(leafPid) && !records.returnedChildAliveAtSettlement;
     if (mode === 'missing-executable-immediate-cancel') records.passed &&= !existsSync(join(directory, 'parent.ready'));
+    if (mode === 'supervisor-stdin-eof') {
+      records.eofToSettlementMs = Date.now() - eofStarted;
+      records.passed &&= result.timedOut !== true && records.eofToSettlementMs < 8000;
+    }
     if (mode === 'supervisor-killed') {
       // TerminateProcess on our own host is an explicit crash injection, not
       // an attempt to change Windows permissions or kill unrelated processes.
@@ -108,7 +135,7 @@ async function runCase(mode) {
     mark('operation-settled', { passed: records.passed, ...safe(result) });
   } catch (error) {
     records.harnessError = { name: error.name, code: error.code ?? null,
-      token: ['PROBE_WAIT_TIMEOUT', 'PROBE_RESULT_TIMEOUT'].includes(error.message) ? error.message : 'PROBE_ASSERTION_OR_RUNTIME_ERROR' };
+      token: ['PROBE_WAIT_TIMEOUT', 'PROBE_RESULT_TIMEOUT', 'PROBE_BUSINESS_NOT_STARTED', 'PROBE_PROMISE_REJECTED'].includes(error.message) ? error.message : 'PROBE_ASSERTION_OR_RUNTIME_ERROR' };
   } finally {
     // Cleanup only fixtures created here. The leaf also self-exits in 15 seconds.
     writeFileSync(join(directory, 'stop-parent'), 'stop'); writeFileSync(join(directory, 'stop-leaf'), 'stop');
@@ -124,7 +151,10 @@ async function runCase(mode) {
 }
 
 for (const mode of ['tree', 'exit-clean', 'exit-with-independent-descendant', 'missing-executable-immediate-cancel']) output.cases.push(await runCase(mode));
-if (role === 'candidate') output.cases.push(await runCase('supervisor-killed'));
+if (role === 'candidate') {
+  output.cases.push(await runCase('supervisor-killed'));
+  output.cases.push(await runCase('supervisor-stdin-eof'));
+}
 output.observationsComplete = output.cases.every(row => !row.harnessError && row.allKnownFixturesStopped && !row.cleanupIncomplete);
 output.behaviorCasesPassed = output.cases.every(row => row.passed);
 output.terminationFailureInjection = role === 'candidate' ? 'owned-supervisor-terminated-without-confirmation' : 'not-applicable-to-baseline';
