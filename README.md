@@ -1,41 +1,37 @@
-# Voice Studio Windows file operation regression
+# Voice Studio Windows regression tests
 
-This isolated test repository compares the published 0.2.2 model downloader
-with a candidate fix on native Windows Server 2022 and 2025 runners.
+This public test repository compares the published 0.2.2 downloader and process
+helpers with a 0.2.3 candidate on standard Windows Server 2022 and 2025 runners.
+The owner explicitly authorized the candidate plugin source and synthetic tests
+on this branch. No user reports, recordings, account configuration, credentials,
+model weights, or personal filesystem paths are uploaded.
 
-Only the downloader source, synthetic test fixtures, this workflow, and its
-license are included. No user reports, recordings, account configuration,
-credentials, model weights, or personal filesystem paths are uploaded.
+## Download regression
 
-The tests exercise real Windows file handles and rename operations. Synthetic
-responses replace model network traffic. A passing test validates file
-creation, hash verification, publication and cache reuse, not a complete ASR
-or TTS model installation or inference run, and not Windows 10 build 19045.
+The downloader probe uses real Windows file handles and rename operations with
+small synthetic network responses. It covers publication, hash verification,
+cache reuse, resume, target replacement and retry. It does not run model inference.
 
-Run locally on Windows with Python 3.11:
+## Process regression
 
-```powershell
-python native_probe.py --baseline baseline --candidate candidate --output results.json
-```
+The process probe downloads the public 0.2.2 npm archive after verifying its fixed
+SHA-256, without running install scripts. Six candidate cases exercise cancellation,
+parent-exit timing, an independently detached descendant, immediate cancel during
+startup, supervisor termination without final proof, and control-channel EOF.
+A separate ManagedEngine probe checks normal exit, cancel and retry. All fixture
+processes are created by the probe, have bounded lifetimes, and are explicitly
+cleaned up. It never targets a process discovered elsewhere on the runner.
 
-Each standard GitHub-hosted Windows job is limited to 10 minutes. The workflow
-requires read-only repository access, does not receive deployment secrets,
-and does not publish or install a plugin on anyone's computer.
+The candidate creates an OS Job before the target runs, and verifies the complete
+process tree is empty before clearing stop guards. A separate startup profiler
+measures PowerShell phases under controlled environment variants; it emits fixed
+phase names/timings, never raw environment values, arguments or private control data.
 
-## Process-stop investigation branch
+Candidate source hashes are recorded in candidate-package-source-hashes.json.
+Node 24 matches the reporter runtime's major version. Passing these tests does not
+establish which historical branch occurred on a user's machine or validate complete
+model installation/inference on Windows 10 build 19045.
 
-The manual workflow on this branch downloads the already public 0.2.2 npm
-archive and verifies its fixed SHA-256 before reading its process helper. No
-package install scripts run. Four short-lived synthetic process trees observe
-normal cancellation, parent-exit timing, a known surviving descendant, and a
-deliberately paused output stream. Only this probe's own parent PID is passed
-to taskkill; child fixtures also exit on a control file or after 15 seconds.
-
-These observations distinguish possible stop outcomes. They do not establish
-which occurred on a reporter's machine. Pausing stdout is an explicit test
-condition and must not be presented as behavior observed in the product.
-
-The surviving-descendant control uses a detached child with independent stdio
-and asserts it is alive at cancellation settlement. This prevents parent/pipe
-closure from being mistaken for proof that the whole process tree is gone.
-Node 24 is selected to match the reporter's runtime major version.
+Workflows run manually with read-only repository access on standard hosted runners.
+They have bounded timeouts, receive no deployment secrets, and do not publish or
+install the plugin on anyone's computer.

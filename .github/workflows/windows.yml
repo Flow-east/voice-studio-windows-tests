@@ -23,33 +23,10 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
-      - name: Load hash-pinned public release without install scripts
+      - name: Profile explicit system module loading
         shell: pwsh
-        run: python load_released_package.py
-      - name: Compile supervisor with Windows PowerShell 5
-        shell: powershell
-        run: |
-          $source = Get-Content candidate-package/runtime/windows-job.ps1 -Raw
-          $native = [regex]::Match($source, "(?s)Add-Type -TypeDefinition @'\r?\n(.*?)\r?\n'@").Groups[1].Value
-          if (!$native) { throw 'Missing native supervisor definition' }
-          Add-Type -TypeDefinition $native -ErrorAction Stop
-          Write-Output 'Supervisor C# compilation passed'
-      - name: Observe published baseline
-        shell: pwsh
-        run: node native_stop_regression.mjs --package-dir released --role baseline --output stop-baseline.json
-      - name: Verify owned-job candidate
+        run: node profile_startup.mjs --package-dir candidate-package --output profile.json
+      - name: Show bounded profile results
         if: always()
         shell: pwsh
-        run: node native_stop_regression.mjs --package-dir candidate-package --role candidate --output stop-candidate.json
-      - name: Verify model preparation integration
-        if: always()
-        shell: pwsh
-        run: |
-          if (Test-Path native_managed_stop.mjs) { node native_managed_stop.mjs --package-dir candidate-package --output stop-managed.json }
-      - name: Show bounded synthetic results
-        if: always()
-        shell: pwsh
-        run: |
-          foreach ($name in @('baseline','candidate','managed')) {
-            if (Test-Path "stop-$name.json") { Write-Output "PROBE_$($name.ToUpper())_JSON"; Get-Content "stop-$name.json" }
-          }
+        run: Get-Content profile.json
