@@ -21,3 +21,16 @@ python native_probe.py --baseline baseline --candidate candidate --output result
 Each standard GitHub-hosted Windows job is limited to 10 minutes. The workflow
 requires read-only repository access, does not receive deployment secrets,
 and does not publish or install a plugin on anyone's computer.
+
+## Process-stop investigation branch
+
+The manual workflow on this branch downloads the already public 0.2.2 npm
+archive and verifies its fixed SHA-256 before reading its process helper. No
+package install scripts run. Four short-lived synthetic process trees observe
+normal cancellation, parent-exit timing, a known surviving descendant, and a
+deliberately paused output stream. Only this probe's own parent PID is passed
+to taskkill; child fixtures also exit on a control file or after 15 seconds.
+
+These observations distinguish possible stop outcomes. They do not establish
+which occurred on a reporter's machine. Pausing stdout is an explicit test
+condition and must not be presented as behavior observed in the product.

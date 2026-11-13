@@ -1,37 +1,32 @@
-name: Windows model file publication
+name: Windows process stop investigation
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
-  native-windows:
-    name: Native file operations (${{ matrix.os }})
+  native-windows-stop:
+    name: Native process stop (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    env:
-      PYTHONDONTWRITEBYTECODE: '1'
-      PYTHONUTF8: '1'
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.11'
-      - name: Compare released and candidate downloaders on native NTFS
+      - name: Load hash-pinned public release without install scripts
         shell: pwsh
-        run: python native_probe.py --baseline baseline --candidate candidate --output results.json
-      - name: Show bounded fixture results
+        run: python load_released_package.py
+      - name: Investigate controlled process trees
+        shell: pwsh
+        run: node native_stop_probe.mjs --package-dir released --output stop-results.json
+      - name: Show bounded synthetic results
         if: always()
         shell: pwsh
         run: |
-          if (Test-Path results.json) { Get-Content results.json }
+          if (Test-Path stop-results.json) { Get-Content stop-results.json }
