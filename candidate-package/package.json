@@ -1,6 +1,6 @@
 {
   "name": "cortico-world-local-voice-studio",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "大肥鱼语音助手：配合 Coopanion 官方 QQ 插件使用，通过本地模型识别 QQ 语音、发送语音回复、生成唱歌语音。支持参考音色、演唱参考和自然语言演唱描述，模型按需下载和加载。",
   "type": "module",
   "main": "./src/index.js",

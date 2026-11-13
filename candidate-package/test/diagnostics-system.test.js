@@ -78,6 +78,50 @@ test('stored singing stop failure remains distinct from a current native rename 
   assert.doesNotMatch(JSON.stringify(blocked), /PRIVATE_PATH|"pid"/);
 });
 
+test('state persistence warning reports safe sharing details without changing model results or stop guard', t => {
+  const { log } = setup(t);
+  const since = Date.parse('2026-11-13T14:37:57.118Z'), lastFailureAt = Date.parse('2026-11-13T14:38:03.915Z');
+  const details = ['errnoNumber=-4082', 'errno=EBUSY', 'syscall=rename', 'fileRole=engine-state'];
+  const report = log.report({ running: true, stopFailure: null, statePersistenceWarning: {
+    code: 'STATE_PERSISTENCE_DEGRADED', message: 'PRIVATE_PATH C:\\Users\\PRIVATE', details: [...details, 'path=C:\\Users\\PRIVATE', 'proxy=https://user:password@private.test', 'syscall=PRIVATE'],
+    since, lastFailureAt, path: 'PRIVATE_PATH',
+  }, engine: {
+    transcription: { state: 'preparing', progress: { phase: 'downloading', completedBytes: 1024, totalBytes: 4096 } },
+    speech: { state: 'ready' },
+    singing: { state: 'failed', errorCode: 'MODEL_DOWNLOAD_CHECKSUM' },
+  } });
+  assert.deepEqual(report.summary.statePersistenceWarning.details, details);
+  assert.equal(report.summary.statePersistenceWarning.since, new Date(since).toISOString());
+  assert.equal(report.summary.statePersistenceWarning.lastFailureAt, new Date(lastFailureAt).toISOString());
+  assert.equal(report.summary.models.transcription.state, 'preparing');
+  assert.equal(report.summary.models.transcription.progress.completedBytes, 1024);
+  assert.equal(report.summary.models.transcription.error, undefined);
+  assert.equal(report.summary.models.speech.state, 'ready');
+  assert.equal(report.summary.models.speech.error, undefined);
+  assert.equal(report.summary.models.singing.error.code, 'MODEL_DOWNLOAD_CHECKSUM');
+  assert.equal(report.summary.stopFailure, null);
+  assert.match(report.text, /状态保存提醒：STATE_PERSISTENCE_DEGRADED/);
+  assert.match(report.text, /任务不因此中断/);
+  assert.match(report.text, /当前停止保护：未触发/);
+  for (const detail of details) assert(report.text.includes(detail));
+  assert.doesNotMatch(JSON.stringify(report), /PRIVATE|C:\\Users|password|private\.test/);
+  assert.equal(report.entries.length, 0);
+});
+
+test('cleared or unrecognized persistence warning is absent and invalid timestamps never reach reports', t => {
+  const { log } = setup(t);
+  for (const statePersistenceWarning of [undefined, null, false, { code: 'PRIVATE_PATH', details: ['errno=EBUSY'] }]) {
+    const report = log.report({ statePersistenceWarning });
+    assert.equal(report.summary.statePersistenceWarning, undefined);
+    assert.doesNotMatch(report.text, /状态保存提醒|STATE_PERSISTENCE_DEGRADED|PRIVATE/);
+  }
+  const report = log.report({ statePersistenceWarning: { code: 'STATE_PERSISTENCE_DEGRADED', details: 'PRIVATE_PATH', since: Infinity, lastFailureAt: 'PRIVATE_PATH' } });
+  assert.deepEqual(report.summary.statePersistenceWarning.details, []);
+  assert.equal(report.summary.statePersistenceWarning.since, undefined);
+  assert.equal(report.summary.statePersistenceWarning.lastFailureAt, undefined);
+  assert.doesNotMatch(report.text, /受阻时间|PRIVATE/);
+});
+
 test('copyable report contains taskkill failure status and confirmation stage, without process output', t => {
   const { log } = setup(t);
   const result = { terminationFailed: true, terminationMethod: 'taskkill', terminationStage: 'execute', terminationErrorCode: 'TASKKILL_NONZERO_EXIT', terminationExitCode: 5, terminationSignal: 'SIGKILL', stderr: 'C:\\Users\\PRIVATE token=secret' };

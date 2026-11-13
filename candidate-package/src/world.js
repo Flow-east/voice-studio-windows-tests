@@ -609,7 +609,7 @@ export class VoiceStudioWorld {
     if (!this.diagnosticLog) throw new StudioError('请先启用语音助手，再查看诊断信息。');
     if (options.level !== undefined && !['all', 'info', 'warning', 'warn', 'error'].includes(options.level)) throw new StudioError('日志级别无效。');
     if (options.limit !== undefined && (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 200)) throw new StudioError('日志条数需要在 1 到 200 之间。');
-    const report = this.diagnosticLog.report(this.state());
+    const report = this.diagnosticLog.report({ ...this.state(), statePersistenceWarning: this.engine?.statePersistenceStatus?.() ?? null });
     return { ...report, entries: this.diagnosticLog.list({ level: options.level === 'all' ? undefined : options.level === 'warn' ? 'warning' : options.level, limit: options.limit ?? 100 }) };
   }
   persistVoice(patch, generation, { allowStopped = false } = {}) {

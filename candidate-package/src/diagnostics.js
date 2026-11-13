@@ -115,6 +115,14 @@ const codeOf = value => typeof value === 'string' && Object.hasOwn(CATALOG, valu
 const safeSetupStep = value => typeof value === 'string' && Object.hasOwn(SETUP_STEPS, value) ? value : undefined;
 const DETAIL_PATTERN = new RegExp(`^(?:exception=(?:${EXCEPTIONS.join('|')})|errno=(?:EACCES|EPERM|ENOENT|ENOSPC|ETIMEDOUT|ECONNREFUSED|ENOTFOUND|ENOMEM|EIO)|http=[45]\\d{2}|curl=\\d{1,2}|exit=-?\\d{1,3}|signal=SIG(?:TERM|KILL|ABRT|SEGV|BUS)|media=[1-4]|module=(?:${MODULES.join('|')})|frame=(?:${RUNTIME_FILES.map(name => name.replaceAll('.', '\\.')).join('|')}):\\d{1,5})$`);
 const safeDetails = value => Array.isArray(value) ? [...new Set(value.filter(item => typeof item === 'string' && (DETAIL_PATTERN.test(item) || safeContextDetail(item))))].slice(0, 32) : [];
+function safeStatePersistenceWarning(value) {
+  if (!value || value.code !== 'STATE_PERSISTENCE_DEGRADED') return undefined;
+  const timestamp = time => Number.isSafeInteger(time) && time > 0 && time < 253402300800000 ? new Date(time).toISOString() : undefined;
+  const since = timestamp(value.since), lastFailureAt = timestamp(value.lastFailureAt);
+  return { code: 'STATE_PERSISTENCE_DEGRADED',
+    message: '准备进度状态文件暂时无法保存；任务不因此中断，重启后重新检查模型。',
+    details: safeDetails(value.details), ...(since ? { since } : {}), ...(lastFailureAt ? { lastFailureAt } : {}) };
+}
 function safeDiagnostic(value) {
   let code = codeOf(value?.code);
   if (!code) return undefined;
@@ -439,6 +447,7 @@ export class DiagnosticLog {
   }
   report(snapshot = {}) {
     const timestamp = this.now(), engine = snapshot.engine ?? {}, qq = snapshot.qq ?? {}, rawJobs = Array.isArray(snapshot.jobs) ? snapshot.jobs.slice(-500) : [];
+    const statePersistenceWarning = safeStatePersistenceWarning(snapshot.statePersistenceWarning);
     const stopFailure = snapshot.stopFailure === null ? null : snapshot.stopFailure && typeof snapshot.stopFailure === 'object'
       ? safeDiagnostic({ code: 'PROCESS_TERMINATION_FAILED', details: processContextDetails(snapshot.stopFailure) }) : undefined;
     const entries = this.list({ limit: 200 });
@@ -480,6 +489,7 @@ export class DiagnosticLog {
       queued: limitNumber(snapshot.queued, 0, 100) ?? 0, qq: { status: ['connected', 'disconnected', 'disabled', 'missing', 'unknown'].includes(qq.status) ? qq.status : 'unknown', version: safeVersion(qq.version) },
       downloadPolicy: 'automatic', reportSchema: 2,
       ...(stopFailure !== undefined ? { stopFailure } : {}),
+      ...(statePersistenceWarning ? { statePersistenceWarning } : {}),
       ...(['mac-arm64', 'mac-x64', 'windows-x64', 'windows-cuda'].includes(snapshot.device?.runtimeProfile) ? { runtimeProfile: snapshot.device.runtimeProfile } : {}),
       models, jobCounts, failures, storageAvailable: this.storageAvailable,
     };
@@ -490,6 +500,11 @@ export class DiagnosticLog {
     if (stopFailure !== undefined) lines.splice(lines.indexOf('模型下载：优先国内，失败后自动尝试国外'), 0,
       `当前停止保护：${stopFailure ? '已触发，暂停新任务和清理' : '未触发'}`,
       ...(stopFailure?.details.length ? [`停止保护详情：${stopFailure.details.join(', ')}`] : []));
+    if (statePersistenceWarning) lines.splice(lines.indexOf('模型下载：优先国内，失败后自动尝试国外'), 0,
+      `状态保存提醒：${statePersistenceWarning.code} | ${statePersistenceWarning.message}`,
+      ...(statePersistenceWarning.details.length ? [`状态保存详情：${statePersistenceWarning.details.join(', ')}`] : []),
+      ...(statePersistenceWarning.since ? [`首次受阻时间：${statePersistenceWarning.since}`] : []),
+      ...(statePersistenceWarning.lastFailureAt ? [`最近受阻时间：${statePersistenceWarning.lastFailureAt}`] : []));
     for (const [kind, model] of Object.entries(models)) {
       lines.push(`${kind}: ${model.name} | ${model.state}${model.source ? ` | 下载来源：${sourceLabel(model.source)}` : ''}${model.fallbackReason ? ` | 国内失败原因：${model.fallbackReason}` : ''}${model.setupStep ? ` | 准备环节：${SETUP_STEPS[model.setupStep]}` : ''}${model.stage ? ` | ${model.stage}` : ''}${model.error ? ` | ${model.error.code}: ${model.error.message}` : ''}`);
       if (model.progress) lines.push(`准备进度：${model.progress.phase ?? 'unknown'}${model.progress.completedBytes !== undefined ? ` | 已完成字节：${model.progress.completedBytes}` : ''}${model.progress.totalBytes !== undefined ? ` | 总字节：${model.progress.totalBytes}` : ''}${model.progress.elapsedSeconds !== undefined ? ` | 耗时秒：${model.progress.elapsedSeconds}` : ''}`);

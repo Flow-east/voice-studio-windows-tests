@@ -152,7 +152,11 @@ export class ManagedEngine {
     this.runtimeProfile = this.profile.id;
     this.networkResolver = networkResolver; this.spawnProcess = spawnProcess; this.parentEnv = parentEnv; this.terminateTree = terminateTree; this.signalProcess = signalProcess; this.terminationFailed = false; this.terminationFailure = null;
     this.busy = null; this.child = null; this.controller = null; this.cancelTimer = null; this.lastStateWrite = 0;
-    this.stateWriter = new RetryingFileWriter({ fileRole: 'engine-state', platform: this.platform, onError: error => this.fileWriteFailure?.(error) });
+    this.statePersistenceWarning = null; this.stateRetryAt = 0;
+    this.stateWriter = new RetryingFileWriter({ fileRole: 'engine-state', platform: this.platform, onError: error => {
+      if (this.recoverableStateFailure(error)) this.warnStatePersistence(error);
+      else this.fileWriteFailure?.(error);
+    } });
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
     if (lstatSync(this.root).isSymbolicLink()) throw Error('引擎目录不能是符号链接');
     const runtime = read(join(this.root, 'runtime-profile.json'));
@@ -247,11 +251,67 @@ export class ManagedEngine {
     this.state = next;
     return { ok: true, models, components: [...affected] };
   }
-  persistState(throttled = false) {
+  recoverableStateFailure(error) {
+    if (error?.fileRole !== 'engine-state' || !this.stateWriter.isRetryable(error)) return false;
+    // A sharing conflict on this reconstructible UI cache must not stop the
+    // real model operation. Invalid targets and other filesystem errors still
+    // fail normally; model/config/ready-marker writes never use this path.
+    try { if (!lstatSync(join(this.root, 'setup-state.json')).isFile()) return false; }
+    catch (failure) { if (failure?.code !== 'ENOENT') return false; }
+    return true;
+  }
+  warnStatePersistence(error) {
     const now = Date.now();
-    if (throttled && now - this.lastStateWrite < 1000) return;
+    this.statePersistenceWarning = {
+      code: 'STATE_PERSISTENCE_DEGRADED',
+      message: '准备进度暂时无法保存；当前模型状态仍会实时更新，重启后会重新检查模型完整性。',
+      details: diagnose(error).details,
+      since: this.statePersistenceWarning?.since ?? now, lastFailureAt: now,
+    };
+    this.stateRetryAt = now + 1000;
+  }
+  statePersistenceStatus() {
+    const warning = this.statePersistenceWarning;
+    return warning ? { ...warning, details: [...warning.details] } : null;
+  }
+  persistState(throttled = false, force = false) {
+    const now = Date.now();
+    if (this.stateWriter.error && this.recoverableStateFailure(this.stateWriter.error)) {
+      // RetryingFileWriter intentionally retains terminal errors for strict
+      // callers. Only this optional cache may start a later bounded attempt.
+      this.stateWriter.reset();
+    }
+    if (this.stateWriter.error) throw this.stateWriter.error;
+    if (!force && (now < this.stateRetryAt || throttled && !this.stateWriter.pending && now - this.lastStateWrite < 1000)) return;
     const snapshot = JSON.parse(JSON.stringify(this.state));
-    this.stateWriter.write(() => save(join(this.root, 'setup-state.json'), snapshot)); this.lastStateWrite = now;
+    this.stateWriter.write(() => {
+      save(join(this.root, 'setup-state.json'), snapshot);
+      // Clear degradation only after an actual successful save, never merely
+      // because retries were drained, canceled, or a new task was started.
+      this.statePersistenceWarning = null; this.stateRetryAt = 0;
+    }); this.lastStateWrite = now;
+  }
+  async flushState({ signal, retry = false, ignoreCancelled = false } = {}) {
+    if (retry) {
+      if (signal?.aborted && this.stateWriter.error?.code === 'USER_CANCELLED') this.stateWriter.reset();
+      this.persistState(false, true);
+    }
+    try { await this.stateWriter.flush({ signal }); }
+    catch (error) {
+      if (this.recoverableStateFailure(error)) {
+        // The in-memory state remains authoritative for this run. A future
+        // progress event (after cooldown) or explicit flush retries its latest
+        // snapshot; no background timer survives a settled command or task.
+        if (!this.statePersistenceWarning) this.warnStatePersistence(error);
+        this.stateWriter.reset();
+        return;
+      }
+      if (signal?.aborted && error?.code === 'USER_CANCELLED') {
+        this.stateWriter.reset();
+        if (ignoreCancelled) return;
+      }
+      throw error;
+    }
   }
   update(kind, stage, extra = {}) {
     const now = Date.now(), previous = this.state[kind]?.state === 'preparing' ? this.state[kind].progress : null;
@@ -297,7 +357,7 @@ export class ManagedEngine {
     let onWriteFailure;
     const logWriter = new RetryingFileWriter({ fileRole: 'setup-log', platform: this.platform, onError: error => onWriteFailure?.(error) });
     try {
-      await this.stateWriter.flush({ signal: this.controller.signal });
+      await this.flushState({ signal: this.controller.signal });
       if (this.controller.signal.aborted) throw Error('准备已取消');
       logWriter.write(() => writeFileSync(logPath, '', { mode: 0o600 }));
       await logWriter.flush({ signal: this.controller.signal });
@@ -353,11 +413,11 @@ export class ManagedEngine {
         // Persistence can fail even after the child has closed. Never leave
         // stopCompletion pending or let this filesystem exception kill the host.
         if (owner && this.state[owner]?.state === 'preparing') {
-          try { this.persistState(); } catch (failure) { error ??= safeError(failure); }
+          try { this.persistState(false, true); } catch (failure) { error ??= safeError(failure); }
         }
         // Await both bounded writers even when the worker already failed. No
         // timer or stale snapshot may survive command settlement into a retry.
-        const writes = await Promise.allSettled([logWriter.flush({ signal: this.controller.signal }), this.stateWriter.flush({ signal: this.controller.signal })]);
+        const writes = await Promise.allSettled([logWriter.flush({ signal: this.controller.signal }), this.flushState({ signal: this.controller.signal })]);
         for (const result of writes) if (result.status === 'rejected') error ??= safeError(result.reason);
         error ??= callbackError;
         if (!error && this.controller.signal.aborted) error = cancelledError();
@@ -630,8 +690,9 @@ export class ManagedEngine {
       let primaryError;
       try {
         this.stateWriter.reset();
+        this.stateRetryAt = 0;
         this.update(kind, '正在检查本机环境', { progress: { setupStep: 'verification' } });
-        await this.stateWriter.flush({ signal: this.controller.signal });
+        await this.flushState({ signal: this.controller.signal });
         if (this.controller.signal.aborted) throw Error('准备已取消');
         if (kind === 'singing') await this.singing();
         else {
@@ -662,10 +723,9 @@ export class ManagedEngine {
           // The previous command has drained its writer. Retry the final
           // snapshot independently, so an earlier progress failure cannot
           // poison every future explicit preparation attempt.
-          try { await this.stateWriter.flush(); } catch (error) { if (!primaryError) throw error; }
+          try { await this.flushState({ signal: this.controller.signal, ignoreCancelled: true }); } catch (error) { if (!primaryError) throw error; }
           this.stateWriter.reset();
-          this.persistState();
-          await this.stateWriter.flush();
+          await this.flushState({ signal: this.controller.signal, retry: true, ignoreCancelled: true });
         }
         catch (error) {
           // A second persistence failure must not replace the worker's original

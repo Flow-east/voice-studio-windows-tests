@@ -1,11 +1,11 @@
-name: Windows busy file regression
+name: Windows persistent progress cache regression
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  busy-file-regression:
-    name: File lock recovery (${{ matrix.os }})
+  persistent-state-regression:
+    name: Persistent progress cache (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -22,7 +22,7 @@ jobs:
           package-manager-cache: false
       - name: Load hash-pinned published baseline
         shell: pwsh
-        run: python load_busy_baseline.py
-      - name: Verify native file lock recovery and regressions
+        run: python load_state_baseline.py
+      - name: Verify persistent state sharing conflicts and regressions
         shell: pwsh
-        run: node ci_busy_tests.mjs
+        run: node ci_state_suite.mjs

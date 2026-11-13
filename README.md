@@ -1,44 +1,17 @@
-# Voice Studio Windows regression tests
+# Native Windows progress-cache tests
 
-This owner-authorized public repository contains synthetic tests and candidate
-plugin source. It contains no user reports, recordings, credentials, model
-weights, or personal filesystem paths.
+Synthetic reproduction of exclusive `setup-state.json` locks while the real
+managed-engine prepare/command lifecycle runs in a separate Node host.
+PowerShell holds FileShare.None through worker completion and preparation
+settlement; a tiny synthetic model fixture passes the actual marker/readiness
+checks. No model download, inference, user data, proxy settings, or credentials
+are used. The only baseline network fetch is the hash-pinned published npm
+0.2.5 tarball. Candidate source byte hashes are checked before tests.
 
-## Current file-sharing recovery candidate (unpublished)
+Scenarios compare the published baseline failure with successful preparation,
+post-unlock persistence recovery, retained worker checksum failure, and prompt
+cancellation. Existing startup, callback, diagnostics, and bounded-retry tests
+also run. Windows Server 2022 and 2025 are CI coverage, not a claim of testing
+the reporting user's Windows 10 machine.
 
-The `windows.yml` manual workflow compares the hash-pinned public 0.2.4
-archive with a candidate that retries temporary setup-log and progress-state
-sharing conflicts without blocking the host event loop. Separate PowerShell
-processes hold real exclusive Windows file handles. Tests check both transient
-recovery and persistent failures, including actual output/state persistence,
-bounded completion, safe diagnostic context, child shutdown and preserved
-synthetic cache bytes. The startup/crash-containment and diagnostic tests also
-run against the exact candidate hashes.
-
-These are controlled native Windows Server 2022/2025 tests. They do not identify
-the file or locking process in any particular user's Windows 10 installation.
-No model weights are downloaded and no inference or deployment occurs.
-
-## Previous 0.2.4 startup recovery verification
-
-The current manual workflow runs on standard Windows Server 2022/2025 with Node
-24. It loads the hash-pinned public 0.2.3 archive without install scripts and
-reproduces an uncaught filesystem failure escaping a Node event callback. The
-baseline child stream is synthetic; the filesystem error and host exit are real.
-
-The candidate removes the Windows Job wrapper and returns to direct process
-launches. Windows startup no longer starts model preparation automatically.
-Sixteen tests per OS cover event-callback failures with real worker processes,
-stop denial, final persistence failure and retry, explicit manual setup, and a
-fresh host after forced termination. Diagnostics and process safety guards are
-retained. Tests do not download model weights or run inference.
-
-All candidate file hashes are recorded in candidate-package-source-hashes.json.
-The workflow is bounded, read-only, and receives no deployment secrets. It does
-not install or change a plugin on anyone's computer. The tests establish the
-controlled behavior, not the reporter's exact historical crash cause or complete
-Coopanion installation on Windows 10 build 19045.
-
-Previous commits retain the 0.2.3 downloader sharing/rename tests and now-withdrawn
-Job-supervisor experiments. The downloader repair is unchanged in 0.2.4. Historical
-Job test passes are not claims about the current process-management implementation.
+Historical harnesses remain in this repository for earlier releases.
