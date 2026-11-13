@@ -10,7 +10,7 @@ import { diagnose } from './diagnostics.js';
 import { resolveDownloadNetwork } from './download-network.js';
 import { platformProfile, UV_DISTRIBUTIONS } from './platform.js';
 import { runtimeToolSources, WINDOWS_PYTHON_MIRROR } from './runtime-downloads.js';
-import { killWindowsProcessTree, privateProcessEnvironment, spawnOwnedProcess, terminateWindowsProcess, terminationDetails, windowsSystemExecutable } from './process.js';
+import { killWindowsProcessTree, privateProcessEnvironment, terminationDetails, windowsSystemExecutable } from './process.js';
 import { writeJson } from './files.js';
 
 const PACKAGE = fileURLToPath(new URL('..', import.meta.url));
@@ -144,12 +144,12 @@ function privateEnv(root, platform = process.platform, parentEnv = process.env) 
   return env;
 }
 export class ManagedEngine {
-  constructor({ root, packageDir = PACKAGE, platform = process.platform, arch = process.arch, osRelease = release(), existingSinging, networkResolver = resolveDownloadNetwork, spawnProcess = spawn, windowsJob, parentEnv = process.env, terminateTree = killWindowsProcessTree, signalProcess = process.kill } = {}) {
+  constructor({ root, packageDir = PACKAGE, platform = process.platform, arch = process.arch, osRelease = release(), existingSinging, networkResolver = resolveDownloadNetwork, spawnProcess = spawn, parentEnv = process.env, terminateTree = killWindowsProcessTree, signalProcess = process.kill } = {}) {
     if (!root) throw Error('缺少本地数据目录');
     this.root = resolve(root, 'engine-v1'); this.packageDir = resolve(packageDir); this.platform = platform; this.arch = arch; this.osRelease = osRelease; this.existingSinging = existingSinging;
     this.profile = platformProfile({ platform, arch, osRelease });
     this.runtimeProfile = this.profile.id;
-    this.networkResolver = networkResolver; this.spawnProcess = spawnProcess; this.windowsJob = windowsJob; this.parentEnv = parentEnv; this.terminateTree = terminateTree; this.signalProcess = signalProcess; this.terminationFailed = false; this.terminationFailure = null;
+    this.networkResolver = networkResolver; this.spawnProcess = spawnProcess; this.parentEnv = parentEnv; this.terminateTree = terminateTree; this.signalProcess = signalProcess; this.terminationFailed = false; this.terminationFailure = null;
     this.busy = null; this.child = null; this.controller = null; this.cancelTimer = null; this.lastStateWrite = 0;
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
     if (lstatSync(this.root).isSymbolicLink()) throw Error('引擎目录不能是符号链接');
@@ -282,29 +282,27 @@ export class ManagedEngine {
     // This private environment can contain proxy credentials; never persist it.
     const network = await this.networkResolver({ parentEnv: this.parentEnv, platform: this.platform });
     if (this.controller.signal.aborted) throw Error('准备已取消');
-    const startError = error => {
-      // Preserve fixed system facts, never the OS message, executable or args.
-      const diagnostic = diagnose(error?.code === 'PROCESS_START_FAILED' ? { code: 'PROCESS_START_FAILED' } : '', { spawnError: true, errorCode: error?.code, errorName: error?.name, errno: error?.errno, ...terminationDetails(error) });
-      return Object.assign(Error(diagnostic.message), { code: diagnostic.code, diagnostic });
+    const safeError = (error, spawnError = false) => {
+      const diagnostic = diagnose(error, { ...(spawnError ? { spawnError: true } : {}), errorCode: error?.code, errorName: error?.name, ...terminationDetails(error) });
+      const unsafe = error?.terminationFailed === true || error?.code === 'PROCESS_TERMINATION_FAILED';
+      if (unsafe) { this.terminationFailed = true; this.terminationFailure = terminationDetails(error); }
+      return Object.assign(Error(diagnostic.message), { code: diagnostic.code, diagnostic,
+        ...(Number.isInteger(error?.errno) ? { errno: error.errno } : {}), ...terminationDetails(error),
+        ...(unsafe ? { code: 'PROCESS_TERMINATION_FAILED', terminationFailed: true } : {}) });
     };
-    const terminationError = result => {
-      this.terminationFailed = true;
-      this.terminationFailure = terminationDetails({ terminationMethod: this.platform === 'win32' ? 'taskkill' : 'process-group', terminationStage: 'execute', ...result });
-      return Object.assign(Error('后台程序未能停止，请完全退出并确认后台进程结束后重试。'), { code: 'PROCESS_TERMINATION_FAILED', terminationFailed: true, ...this.terminationFailure });
-    };
-    const unsafeStop = error => error?.terminationFailed === true || error?.code === 'PROCESS_TERMINATION_FAILED';
     return await new Promise((resolveCommand, reject) => {
       const logPath = join(this.root, logName);
-      writeFileSync(logPath, '', { mode: 0o600 });
       let child;
-      try { child = spawnOwnedProcess(executable, args, { env: { ...privateEnv(this.root, this.platform, this.parentEnv), ...network.proxyEnv, ...extraEnv }, cwd: this.root, detached: this.platform !== 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], shell: false }, { platform: this.platform, spawnProcess: this.spawnProcess, windowsJob: this.windowsJob }); }
-      catch (error) { reject(unsafeStop(error) ? terminationError(error) : startError(error)); return; }
-      this.child = child; let output = '', timedOut = false, finished = false, killTimer, timer, line = '', dropping = false, terminating = null, closed = false, stoppedTree = false, stopRequested = false;
+      try {
+        writeFileSync(logPath, '', { mode: 0o600 });
+        child = this.spawnProcess(executable, args, { env: { ...privateEnv(this.root, this.platform, this.parentEnv), ...network.proxyEnv, ...extraEnv }, cwd: this.root, detached: this.platform !== 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
+      } catch (error) { reject(safeError(error, true)); return; }
+      this.child = child; let output = '', timedOut = false, finished = false, killTimer, timer, line = '', dropping = false, terminating = null, closed = false, stoppedTree = false, stopRequested = false, callbackError = null;
       let resolveStopped; const stopCompletion = new Promise(resolve => { resolveStopped = resolve; });
       const decoder = new StringDecoder('utf8');
       const collect = bytes => { output = (output + bytes.toString()).slice(-512000); writeFileSync(logPath, output, { mode: 0o600 }); };
       const acceptLine = value => {
-        if (this.controller.signal.aborted || finished || typeof onProgress !== 'function') return;
+        if (this.controller.signal.aborted || finished || callbackError || typeof onProgress !== 'function') return;
         const event = modelProgressEvent(value, modelKind); if (event) onProgress(event);
       };
       const parse = text => {
@@ -317,50 +315,80 @@ export class ManagedEngine {
           line = ''; dropping = false; offset = end + 1;
         }
       };
-      const collectStdout = bytes => { collect(bytes); if (typeof onProgress === 'function') parse(decoder.write(bytes)); else this.activity(owner); };
-      // A retry warning or redraw of tqdm is not new model data. Only a phase
-      // or byte change advances model activity; ordinary installers use output.
-      const collectStderr = bytes => { collect(bytes); if (!modelKind && typeof onProgress !== 'function') this.activity(owner); };
+      // EventEmitter callbacks run outside the command promise's executor.
+      // Convert disk/progress failures into a controlled stop before rejecting.
+      const failCallback = error => {
+        if (finished) return;
+        callbackError ??= safeError(error);
+        if (closed) finish(callbackError); else stop();
+      };
+      const protect = callback => (...values) => {
+        if (finished || callbackError) return;
+        try { callback(...values); } catch (error) { failCallback(error); }
+      };
+      const collectStdout = protect(bytes => { collect(bytes); if (typeof onProgress === 'function') parse(decoder.write(bytes)); else this.activity(owner); });
+      const collectStderr = protect(bytes => { collect(bytes); if (!modelKind && typeof onProgress !== 'function') this.activity(owner); });
       child.stdout?.on('data', collectStdout); child.stderr?.on('data', collectStderr);
       const finish = (error) => {
         if (finished) return;
-        if (!error && typeof onProgress === 'function') { parse(decoder.end()); if (line && !dropping) acceptLine(line); }
+        error ??= callbackError;
+        if (!error && typeof onProgress === 'function') {
+          try { parse(decoder.end()); if (line && !dropping) acceptLine(line); }
+          catch (failure) { error = safeError(failure); }
+        }
+        // Persistence can fail even after the child has closed. Never leave
+        // stopCompletion pending or let this filesystem exception kill the host.
+        if (owner && this.state[owner]?.state === 'preparing') {
+          try { this.persistState(); } catch (failure) { error ??= safeError(failure); }
+        }
         finished = true; line = ''; dropping = false; clearTimeout(timer); clearTimeout(killTimer);
         child.stdout?.removeListener('data', collectStdout); child.stderr?.removeListener('data', collectStderr);
-        if (owner && this.state[owner]?.state === 'preparing') this.persistState();
+        child.stdout?.resume(); child.stderr?.resume();
         if (this.child === child) { this.child = null; clearTimeout(this.cancelTimer); this.cancelTimer = null; }
         this.stopCommand = null;
         resolveStopped();
         if (error) reject(error); else resolveCommand(capture ? output : '');
       };
-      const cancelledError = () => Error(timedOut ? '准备超时，请检查网络后重试；已下载文件会保留' : '准备已取消');
+      const cancelledError = () => callbackError ?? Error(timedOut ? '准备超时，请检查网络后重试；已下载文件会保留' : '准备已取消');
       const stopFailure = result => {
-        if (!finished) finish(terminationError(result));
+        if (finished) return;
+        this.terminationFailed = true;
+        this.terminationFailure = terminationDetails({ terminationMethod: this.platform === 'win32' ? 'taskkill' : 'process-group', terminationStage: 'execute', ...result });
+        finish(Object.assign(Error('后台程序未能停止，请完全退出并确认后台进程结束后重试。'), {
+          ...(callbackError?.diagnostic ? { diagnostic: callbackError.diagnostic } : {}),
+          ...(Number.isInteger(callbackError?.errno) ? { errno: callbackError.errno } : {}),
+          code: 'PROCESS_TERMINATION_FAILED', terminationFailed: true, ...this.terminationFailure }));
       };
       const stop = () => {
         stopRequested = true;
         if (finished || terminating) return stopCompletion;
-        // A failed spawn has no PID and emits error asynchronously. Wait for
-        // spawn/error instead of latching an invalid-PID tree-stop failure.
+        // A failed spawn reports error asynchronously; it has no tree to kill.
         if (!Number.isSafeInteger(child.pid) || child.pid <= 0) return stopCompletion;
-        if (this.platform === 'win32') {
-          terminating = terminateWindowsProcess(child, { spawnProcess: this.spawnProcess, environment: this.parentEnv, terminateTree: this.terminateTree });
-        } else {
-          terminating = new Promise(resolveStop => {
-            const signal = name => {
-              const details = { terminationMethod: 'process-group', terminationStage: 'execute', terminationSignal: name };
-              try { this.signalProcess(-child.pid, name); return { ok: true, ...details }; }
-              catch (error) { return error.code === 'ESRCH' ? { ok: true, ...details } : { ok: false, ...details, terminationErrorCode: terminationDetails({ errorCode: error.code }).terminationErrorCode || 'PROCESS_SIGNAL_FAILED' }; }
-            };
-            const first = signal('SIGTERM');
-            if (!first.ok) return resolveStop(first);
-            // Always kill remaining descendants, even if the parent exits first.
-            killTimer = setTimeout(() => resolveStop(signal('SIGKILL')), 1500);
-          });
+        terminating = true;
+        let termination;
+        try {
+          if (this.platform === 'win32') {
+            termination = this.terminateTree(child.pid, { spawnProcess: this.spawnProcess, environment: this.parentEnv });
+          } else {
+            termination = new Promise(resolveStop => {
+              const signal = name => {
+                const details = { terminationMethod: 'process-group', terminationStage: 'execute', terminationSignal: name };
+                try { this.signalProcess(-child.pid, name); return { ok: true, ...details }; }
+                catch (error) { return error.code === 'ESRCH' ? { ok: true, ...details } : { ok: false, ...details, terminationErrorCode: terminationDetails({ errorCode: error.code }).terminationErrorCode || 'PROCESS_SIGNAL_FAILED' }; }
+              };
+              const first = signal('SIGTERM');
+              if (!first.ok) return resolveStop(first);
+              // Always kill remaining descendants, even if the parent exits first.
+              killTimer = setTimeout(() => resolveStop(signal('SIGKILL')), 1500);
+            });
+          }
+        } catch (error) {
+          stopFailure({ terminationErrorCode: terminationDetails({ errorCode: error?.code }).terminationErrorCode || 'PROCESS_TERMINATION_ERROR' });
+          return stopCompletion;
         }
-        terminating = terminating.then(result => {
+        terminating = Promise.resolve(termination).then(result => {
           if (finished) return;
-          if (!result.ok) return stopFailure(result);
+          if (!result?.ok) return stopFailure(result);
           stoppedTree = true;
           if (closed) finish(cancelledError());
           else killTimer = setTimeout(() => stopFailure({ ...terminationDetails(result), terminationStage: 'confirm-exit', terminationErrorCode: 'PROCESS_EXIT_NOT_CONFIRMED' }), 2000);
@@ -368,25 +396,33 @@ export class ManagedEngine {
         return stopCompletion;
       };
       this.stopCommand = stop;
-      timer = setTimeout(() => {
-        timedOut = true;
-        stop();
-      }, timeoutMs); timer.unref();
+      timer = setTimeout(() => { timedOut = true; stop(); }, timeoutMs); timer.unref();
       child.once('spawn', () => { if (stopRequested) stop(); });
-      child.once('error', error => { if (unsafeStop(error)) stopFailure(error); else finish(startError(error)); });
+      child.on('error', error => {
+        if (finished) return;
+        if (error?.terminationFailed || error?.code === 'PROCESS_TERMINATION_FAILED') return stopFailure(error);
+        if (!Number.isSafeInteger(child.pid) || child.pid <= 0) finish(safeError(error, true));
+        else failCallback(error);
+      });
+      const streamFailure = error => { if (!finished) failCallback(error); };
+      child.stdout?.on('error', streamFailure); child.stderr?.on('error', streamFailure);
       child.once('close', code => {
         if (finished) return;
         closed = true;
         if (terminating) { if (stoppedTree) finish(cancelledError()); return; }
+        if (callbackError) return finish(callbackError);
         if (this.controller.signal.aborted) return finish(Error('准备已取消'));
         if (timedOut) return finish(Error('准备超时，请检查网络后重试；已下载文件会保留'));
-        if (code !== 0) {
-          writeFileSync(join(this.root, 'setup-error.log'), output, { mode: 0o600 });
-          const diagnostic = diagnose(output, { code });
-          const error = Object.assign(Error(diagnostic.message), { code: diagnostic.code, diagnostic });
-          return finish(error);
-        }
-        finish();
+        try {
+          if (code !== 0) {
+            const diagnostic = diagnose(output, { code });
+            const error = Object.assign(Error(diagnostic.message), { code: diagnostic.code, diagnostic });
+            try { writeFileSync(join(this.root, 'setup-error.log'), output, { mode: 0o600 }); }
+            catch (failure) { return finish(safeError(failure)); }
+            return finish(error);
+          }
+          finish();
+        } catch (error) { failCallback(error); }
       });
     });
   }
@@ -569,6 +605,7 @@ export class ManagedEngine {
     if (this.ready(kind)) return Promise.resolve(this.status());
     this.controller = new AbortController(); this.update(kind, '正在检查本机环境', { progress: { setupStep: 'verification' } });
     const promise = (async () => {
+      let primaryError;
       try {
         if (kind === 'singing') await this.singing();
         else {
@@ -585,6 +622,7 @@ export class ManagedEngine {
       } catch (error) {
         const progress = this.state[kind]?.progress, provenance = modelProvenance(progress);
         if (!error || typeof error !== 'object') error = Error(String(error));
+        primaryError = error;
         const setupStep = progress?.setupStep;
         if (setupStep) error.setupStep = setupStep;
         const diagnostic = diagnose(error);
@@ -593,7 +631,18 @@ export class ManagedEngine {
         const cancelled = this.controller.signal.aborted && !this.terminationFailed;
         const failureProgress = !cancelled ? failureProgressSnapshot(progress) : undefined;
         this.state[kind] = { state: cancelled ? 'missing' : 'failed', stage: cancelled ? '准备已取消' : this.terminationFailed ? '后台程序未能停止，请完全退出 Coopanion' : '准备未完成', error: diagnostic.message, errorCode: diagnostic.code, errorDetails: diagnostic.details, errorType: diagnostic.errorType, ...(setupStep ? { setupStep } : {}), ...(!cancelled ? { failedAt: Date.now() } : {}), ...(failureProgress ? { failureProgress } : {}), ...(component ? { component } : {}), ...provenance }; throw error;
-      } finally { save(join(this.root, 'setup-state.json'), this.state); this.busy = null; this.child = null; }
+      } finally {
+        try { save(join(this.root, 'setup-state.json'), this.state); }
+        catch (error) {
+          // A second persistence failure must not replace the worker's original
+          // error, especially an unconfirmed stop, or strand the busy latch.
+          if (!primaryError) {
+            const diagnostic = diagnose(error);
+            throw Object.assign(Error(diagnostic.message), { code: diagnostic.code, diagnostic,
+              ...(Number.isInteger(error?.errno) ? { errno: error.errno } : {}) });
+          }
+        } finally { this.busy = null; this.child = null; }
+      }
     })();
     this.busy = { kind, promise }; return promise;
   }

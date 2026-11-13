@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process';
 import { closeSync, openSync, writeSync } from 'node:fs';
 import { win32 } from 'node:path';
-import { spawnWindowsJob, stopWindowsJob } from './windows-job.js';
 const LOG_LIMIT = 2 * 1024 * 1024;
 const OS_ENV = new Set(['PATH', 'HOME', 'USER', 'LOGNAME', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA']);
 const TERMINATION_METHODS = new Set(['taskkill', 'process-group', 'process', 'windows-job']);
@@ -54,17 +53,7 @@ export function killWindowsProcessTree(pid, { spawnProcess = spawn, environment 
     } catch (error) { finish(failedStart(error)); }
   });
 }
-// Custom spawn injection keeps existing test adapters deterministic. Native
-// regression tests explicitly opt into the supervisor while tracking launches.
-export function spawnOwnedProcess(executable, args, options, { platform = process.platform, spawnProcess = spawn, windowsJob = process.platform === 'win32' && platform === 'win32' && spawnProcess === spawn } = {}) {
-  return platform === 'win32' && windowsJob
-    ? spawnWindowsJob(executable, args, options, { spawnProcess, powershell: windowsSystemExecutable('powershell', options.env ?? process.env) })
-    : spawnProcess(executable, args, options);
-}
-export function terminateWindowsProcess(child, { terminateTree = killWindowsProcessTree, ...options } = {}) {
-  return stopWindowsJob(child) ?? terminateTree(child?.pid, options);
-}
-export function runProcess({ pythonPath, runnerPath, configPath, keyword, outputDir, logPath, timeoutMs, key = '', args }, { platform = process.platform, spawnProcess = spawn, environment = process.env, signalProcess = process.kill, windowsJob } = {}) {
+export function runProcess({ pythonPath, runnerPath, configPath, keyword, outputDir, logPath, timeoutMs, key = '', args }, { platform = process.platform, spawnProcess = spawn, environment = process.env, signalProcess = process.kill } = {}) {
   let child, done = false, cancelled = false, timedOut = false, logged = 0, buffered = '';
   let termination = null, pendingClose = null;
   let timer, killTimer, forceTimer, fd, finish;
@@ -84,7 +73,7 @@ export function runProcess({ pythonPath, runnerPath, configPath, keyword, output
     if (done || cancelled) return;
     cancelled = true;
     if (platform === 'win32') {
-      termination = terminateWindowsProcess(child, { spawnProcess, environment });
+      termination = killWindowsProcessTree(child?.pid, { spawnProcess, environment });
       void termination.then(result => {
         termination = null;
         if (!result.ok) {
@@ -111,7 +100,7 @@ export function runProcess({ pythonPath, runnerPath, configPath, keyword, output
     const env = args ? privateProcessEnvironment(environment) : { ...environment };
     Object.assign(env, { PYTHONUNBUFFERED: '1', PYTHONDONTWRITEBYTECODE: '1', PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' });
     if (!args) env.VOICE_STUDIO_API_KEY = key;
-    child = spawnOwnedProcess(pythonPath, [runnerPath, ...argv], { shell: false, detached: platform !== 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env }, { platform, spawnProcess, windowsJob });
+    child = spawnProcess(pythonPath, [runnerPath, ...argv], { shell: false, detached: platform !== 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env });
     child.stdout.on('data', log); child.stderr.on('data', log);
     child.once('error', error => settle({ code: null, spawnError: true, errorCode: error.code, errorName: error.name, ...(error.terminationFailed ? { terminationFailed: true } : {}), ...terminationDetails(error) }));
     child.once('close', (code, termSignal) => settle({ code, signal: termSignal }));

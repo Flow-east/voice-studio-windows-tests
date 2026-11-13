@@ -6,7 +6,7 @@ import { StudioError } from './config.js';
 import { decodeReferenceUpload } from './reference.js';
 import { readContained } from './files.js';
 import { diagnose } from './diagnostics.js';
-import { spawnOwnedProcess, terminateWindowsProcess, terminationDetails } from './process.js';
+import { killWindowsProcessTree, terminationDetails } from './process.js';
 
 const MAX_WAV_BYTES = 6 * 1024 * 1024;
 const FILE = /^reference-[a-f0-9-]{36}\.wav$/;
@@ -39,7 +39,7 @@ function wavInfo(bytes) {
   return { durationSeconds, bytes: bytes.length };
 }
 
-export function convertSingingReference(ffmpegPath, input, output, { platform = process.platform, spawnProcess = spawn, windowsJob, environment = process.env, timeoutMs = 30000 } = {}) {
+export function convertSingingReference(ffmpegPath, input, output, { platform = process.platform, spawnProcess = spawn, environment = process.env, timeoutMs = 30000 } = {}) {
   if (typeof ffmpegPath !== 'string' || !isAbsolute(ffmpegPath)) throw new StudioError('音频处理组件尚未就绪，请先完成语音初始化。');
   try { ffmpegPath = realpathSync(ffmpegPath); if (!lstatSync(ffmpegPath).isFile()) throw invalid(); accessSync(ffmpegPath, constants.X_OK); }
   catch { throw new StudioError('音频处理组件尚未就绪，请先完成语音初始化。'); }
@@ -53,11 +53,11 @@ export function convertSingingReference(ffmpegPath, input, output, { platform = 
       const diagnostic = diagnose(error?.code === 'PROCESS_START_FAILED' ? { code: 'PROCESS_START_FAILED' } : '', { spawnError: true, errorCode: error?.code, errorName: error?.name, errno: error?.errno, ...terminationDetails(error) });
       return Object.assign(new StudioError(diagnostic.message), { code: diagnostic.code, diagnostic });
     };
-    try { child = spawnOwnedProcess(ffmpegPath, ['-hide_banner', '-nostdin', '-loglevel', 'error', '-protocol_whitelist', 'file,pipe', '-format_whitelist', 'wav,mp3,mov,flac,ogg', '-i', input, '-map', '0:a:0', '-vn', '-sn', '-dn', '-t', '31', '-ar', '48000', '-ac', '2', '-c:a', 'pcm_s16le', '-map_metadata', '-1', '-fflags', '+bitexact', '-flags:a', '+bitexact', '-f', 'wav', '-n', output], { stdio: ['ignore', 'ignore', 'ignore'], shell: false, windowsHide: true }, { platform, spawnProcess, windowsJob }); }
+    try { child = spawnProcess(ffmpegPath, ['-hide_banner', '-nostdin', '-loglevel', 'error', '-protocol_whitelist', 'file,pipe', '-format_whitelist', 'wav,mp3,mov,flac,ogg', '-i', input, '-map', '0:a:0', '-vn', '-sn', '-dn', '-t', '31', '-ar', '48000', '-ac', '2', '-c:a', 'pcm_s16le', '-map_metadata', '-1', '-fflags', '+bitexact', '-flags:a', '+bitexact', '-f', 'wav', '-n', output], { stdio: ['ignore', 'ignore', 'ignore'], shell: false, windowsHide: true }); }
     catch (error) { finish(processError(error)); return; }
     timer = setTimeout(() => {
       stopping = true;
-      if (platform === 'win32') void terminateWindowsProcess(child, { spawnProcess, environment }).then(result => {
+      if (platform === 'win32') void killWindowsProcessTree(child?.pid, { spawnProcess, environment }).then(result => {
         if (finished) return;
         if (!result.ok) return finish(failedStop(result));
         stoppedTree = true;

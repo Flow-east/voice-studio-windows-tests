@@ -241,6 +241,9 @@ export class VoiceStudioWorld {
   }
   autoInitialize() {
     if (this.stopFailure || !this.device.supported || settings(this.cfg).backend !== 'managed' || !this.engine) return;
+    // Windows setup must be started explicitly. A host crash can leave a
+    // persisted "preparing" state; reopening must not repeat the failing work.
+    if (this.device.platform === 'win32') return;
     let policy = {};
     try { policy = readJson(this.root, join(this.root, 'voice-setup.json')); } catch {}
     const status = this.engineStatus();
@@ -478,7 +481,10 @@ export class VoiceStudioWorld {
     if (this.singingReferenceTask || this.referenceTask || [...this.setupTasks.keys()].some(key => key !== kind)) throw new StudioError('另一个组件仍在准备中，请完成或取消后再试。');
     if (!this.setupTasks.has(kind)) {
       for (const component of kind === 'speech' ? ['speech', 'transcription', 'reference'] : [kind]) this.setupErrors.delete(component);
-      if (kind === 'speech') writeJson(join(this.root, 'voice-setup.json'), { paused: false });
+      // Persist the restart policy before the first asynchronous setup step.
+      // A terminated host must remain usable on its next launch, even when
+      // setup never reached its ordinary failure/cancellation handlers.
+      if (kind === 'speech' || this.device.platform === 'win32') writeJson(join(this.root, 'voice-setup.json'), { paused: this.device.platform === 'win32' });
       const generation = this.setupGeneration;
       let component = kind, setupStartedAt = Date.now();
       const prepareComponent = async next => {
@@ -706,7 +712,7 @@ export class VoiceStudioWorld {
       const hasReference = !!cfg.referenceAudioPath && !!cfg.referenceText;
       const speechComponent = engine[hasReference ? 'reference' : 'speech'];
       const speechReady = speechComponent.supported !== false && speechComponent.state === 'ready';
-      add('speechEngine', '语音引擎', speechReady, speechReady ? '已就绪' : speechComponent.unsupportedReason || '点击初始化语音即可自动准备');
+      add('speechEngine', '语音引擎', speechReady, speechReady ? '已就绪' : speechComponent.unsupportedReason || '在语音页点击“继续下载语音模型”准备');
       add('transcriptionEngine', 'QQ 语音识别', engine.transcription.supported !== false && engine.transcription.state === 'ready', engine.transcription.unsupportedReason || (engine.transcription.state === 'ready' ? '已就绪' : '基础语音模型准备完成后即可识别'));
       add('reference', '说话音色', !!cfg.referenceAudioPath === !!cfg.referenceText && (!hasReference || engine.reference.state === 'ready' && isFile(cfg.referenceAudioPath)), hasReference ? '已保存参考声音' : '默认音色');
       if (cfg.singingEnabled) {
@@ -716,7 +722,7 @@ export class VoiceStudioWorld {
       }
       add('speechRunner', '语音组件', isFile(this.speechRunner), '随插件提供');
       add('transcriptionRunner', '语音识别组件', isFile(this.transcriptionRunner), '随插件提供');
-      return { ok: checks.every(check => check.ok), checks, singingEnabled: cfg.singingEnabled, qq: await this.refreshQQ(), note: '基础语音模型会自动准备，完成后即可识别和回复 QQ 语音。' };
+      return { ok: checks.every(check => check.ok), checks, singingEnabled: cfg.singingEnabled, qq: await this.refreshQQ(), note: this.device.platform === 'win32' ? 'Windows请在语音页点击“继续下载语音模型”；重启不会自动开始，模型就绪后可识别和回复QQ语音。' : '基础语音模型会自动准备，完成后即可识别和回复 QQ 语音。' };
     }
     let ids = [];
     try { ids = await this.listModels(cfg, this.key()); add('endpoint', '本机模型服务', true, `可读取 ${ids.length} 个模型`); } catch (error) { add('endpoint', '本机模型服务', false, publicError(error)); }

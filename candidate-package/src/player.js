@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { StudioError } from './config.js';
 import { diagnose } from './diagnostics.js';
-import { privateProcessEnvironment, spawnOwnedProcess, terminateWindowsProcess, terminationDetails, windowsSystemExecutable } from './process.js';
+import { privateProcessEnvironment, killWindowsProcessTree, terminationDetails, windowsSystemExecutable } from './process.js';
 
 // A fixed script: the audio path and volume are data in private environment
 // variables, never PowerShell source. MediaEnded is required for success.
@@ -36,7 +36,7 @@ try {
   exit 1
 }
 `;
-export function playFile(path, volume, { platform = process.platform, spawnProcess = spawn, windowsJob, environment = process.env } = {}) {
+export function playFile(path, volume, { platform = process.platform, spawnProcess = spawn, environment = process.env } = {}) {
   let child, done = false, cancelled = false, timer, killer, finish;
   let termination = null, pendingClose = null;
   const promise = new Promise((resolve) => { finish = resolve; });
@@ -57,7 +57,7 @@ export function playFile(path, volume, { platform = process.platform, spawnProce
   const cancel = () => {
     if (done || cancelled) return; cancelled = true;
     if (platform === 'win32') {
-      termination = terminateWindowsProcess(child, { spawnProcess, environment });
+      termination = killWindowsProcessTree(child?.pid, { spawnProcess, environment });
       void termination.then(result => {
         termination = null;
         if (pendingClose?.extra.terminationFailed) settle(false, pendingClose.extra);
@@ -74,8 +74,8 @@ export function playFile(path, volume, { platform = process.platform, spawnProce
   try {
     const level = String(Math.max(0, Math.min(100, Number.isFinite(Number(volume)) ? Number(volume) : 80)) / 100);
     child = platform === 'darwin'
-      ? spawnOwnedProcess('/usr/bin/afplay', ['-v', level, path], { shell: false, stdio: 'ignore' }, { platform, spawnProcess, windowsJob })
-      : spawnOwnedProcess(windowsSystemExecutable('powershell', environment), ['-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', Buffer.from(WINDOWS_PLAY_SCRIPT, 'utf16le').toString('base64')], { shell: false, windowsHide: true, stdio: 'ignore', env: { ...privateProcessEnvironment(environment), VOICE_STUDIO_PLAY_PATH: path, VOICE_STUDIO_PLAY_VOLUME: level } }, { platform, spawnProcess, windowsJob });
+      ? spawnProcess('/usr/bin/afplay', ['-v', level, path], { shell: false, stdio: 'ignore' })
+      : spawnProcess(windowsSystemExecutable('powershell', environment), ['-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', Buffer.from(WINDOWS_PLAY_SCRIPT, 'utf16le').toString('base64')], { shell: false, windowsHide: true, stdio: 'ignore', env: { ...privateProcessEnvironment(environment), VOICE_STUDIO_PLAY_PATH: path, VOICE_STUDIO_PLAY_VOLUME: level } });
     child.once('error', error => settle(false, processError(error))); child.once('close', (code) => settle(code === 0, code === 0 ? {} : { errorCode: 'PLAYBACK_EXIT_' + String(code) }));
     timer = setTimeout(cancel, 300000);
   } catch (error) { settle(false, processError(error)); }
