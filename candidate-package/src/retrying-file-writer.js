@@ -8,8 +8,8 @@ export function fileOperationError(error, fileRole) {
 }
 
 export class RetryingFileWriter {
-  constructor({ fileRole, timeoutMs = 3000, intervalMs = 100, onError } = {}) {
-    this.fileRole = fileRole; this.timeoutMs = timeoutMs; this.intervalMs = intervalMs; this.onError = onError;
+  constructor({ fileRole, platform = process.platform, timeoutMs = 3000, intervalMs = 100, onError } = {}) {
+    this.fileRole = fileRole; this.platform = platform; this.timeoutMs = timeoutMs; this.intervalMs = intervalMs; this.onError = onError;
     this.pending = null; this.error = null; this.action = null; this.timer = null;
   }
   write(action) {
@@ -19,20 +19,26 @@ export class RetryingFileWriter {
     try { this.action(); this.action = null; }
     catch (error) {
       error = fileOperationError(error, this.fileRole);
-      if (!this.isBusy(error)) { this.error = error; this.action = null; throw error; }
+      if (!this.isRetryable(error)) { this.error = error; this.action = null; throw error; }
       this.deadline = Date.now() + this.timeoutMs;
       this.pending = new Promise(resolve => { this.resolvePending = resolve; });
       this.schedule();
     }
   }
-  isBusy(error) { return error?.code === 'EBUSY' || error?.errno === -4082; }
+  isRetryable(error) {
+    if (error?.code === 'EBUSY' || error?.errno === -4082) return true;
+    // Windows reports EPERM for rename-over an exclusively opened state file.
+    // It can also mean a real ACL denial: only retry this specific snapshot
+    // operation, keep the same deadline, and preserve EPERM if it never clears.
+    return this.platform === 'win32' && this.fileRole === 'engine-state' && error?.code === 'EPERM' && error?.syscall === 'rename';
+  }
   schedule() {
     this.timer = setTimeout(() => {
       this.timer = null;
       try { this.action(); this.settle(); }
       catch (error) {
         error = fileOperationError(error, this.fileRole);
-        if (this.isBusy(error) && Date.now() < this.deadline) return this.schedule();
+        if (this.isRetryable(error) && Date.now() < this.deadline) return this.schedule();
         this.error = error; this.settle();
         // Timer callbacks must never leak an exception into the host. The
         // stored failure is still observed by every flush, even without a hook.

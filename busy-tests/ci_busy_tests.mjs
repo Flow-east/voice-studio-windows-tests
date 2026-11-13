@@ -35,10 +35,10 @@ for (const role of ['setup-log','setup-state']) {
   check(`0.2.4 ${role} transient`, ()=>{
     const baseline = run(baselineDir,'0.2.4',role,'transient');
     assert.equal(baseline.fulfilled,false); assert.equal(baseline.rejected,true);
-    // Observe the actual Windows mapping for rename separately; do not assume
-    // every operation reports the same sharing-violation errno as open.
-    assert.ok(Number.isInteger(baseline.errno));
-    if(role==='setup-log') { assert.equal(baseline.errno,-4082); assert.equal(baseline.errorCode,'UNKNOWN'); }
+    // Both Windows 2022 and 2025 native probes observed EBUSY for opening
+    // the locked log, but EPERM for renaming over the locked state file.
+    assert.equal(baseline.errno,role==='setup-log'?-4082:-4048);
+    assert.equal(baseline.errorCode,role==='setup-log'?'UNKNOWN':'PERMISSION_DENIED');
     assert.equal(baseline.workerCompleted,false);
     assert.ok(baseline.elapsedMs<1500,'Baseline must abort during the transient lock');
   });
@@ -58,13 +58,17 @@ for (const role of ['setup-log','setup-state']) {
     const blocked = run(candidateDir,'candidate',role,'persistent');
     assert.equal(blocked.fulfilled,false); assert.equal(blocked.rejected,true); assert.equal(blocked.workerCompleted,false);
     assert.ok(blocked.elapsedMs>=2000 && blocked.elapsedMs<7000,'Persistent sharing conflict should stop before generic command timeout');
-    assert.equal(blocked.errno,-4082);
-    assert.ok(['FILE_IN_USE','RESOURCE_BUSY'].includes(blocked.errorCode),JSON.stringify(blocked));
+    const expectedErrno = role==='setup-log'?-4082:-4048;
+    const expectedName = role==='setup-log'?'EBUSY':'EPERM';
+    assert.equal(blocked.errno,expectedErrno);
+    // A persistent rename EPERM could also be a real ACL denial. Preserve
+    // that classification; the known locker proves only this test's cause.
+    assert.equal(blocked.errorCode,role==='setup-log'?'FILE_IN_USE':'PERMISSION_DENIED');
     const details = blocked.diagnostic?.details || [];
-    assert.ok(details.includes('errnoNumber=-4082'),JSON.stringify(blocked));
-    assert.ok(details.includes('errno=EBUSY'),JSON.stringify(blocked));
+    assert.ok(details.includes('errnoNumber='+expectedErrno),JSON.stringify(blocked));
+    assert.ok(details.includes('errno='+expectedName),JSON.stringify(blocked));
     assert.ok(details.includes('fileRole='+(role==='setup-log'?'setup-log':'engine-state')),JSON.stringify(blocked));
-    assert.ok(details.some(value=>/^syscall=(open|rename|write)$/.test(value)),JSON.stringify(blocked));
+    assert.ok(details.includes('syscall='+(role==='setup-log'?'open':'rename')),JSON.stringify(blocked));
     assert.doesNotMatch(JSON.stringify(blocked.diagnostic),/voice-native-busy-|SYNTHETIC_|[A-Za-z]:\\/);
   });
 }

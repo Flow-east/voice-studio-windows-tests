@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 import { RetryingFileWriter } from '../src/retrying-file-writer.js';
+import { diagnose } from '../src/diagnostics.js';
 
 const busy = () => Object.assign(Error('private path'), { code: 'EBUSY', errno: -4082, syscall: 'open' });
 
@@ -49,4 +50,32 @@ test('cancelling a pending flush clears its timer and cannot resurrect the old s
   const attemptsAtAbort = attempts; await delay(30);
   assert.equal(attempts, attemptsAtAbort); assert.equal(writer.timer, null); assert.equal(writer.action, null);
   writer.reset(); let value; writer.write(() => { value = 'new'; }); await writer.flush(); assert.equal(value, 'new');
+});
+
+test('Windows engine-state rename sharing failure retries and preserves EPERM when persistent', async () => {
+  const writer = new RetryingFileWriter({ fileRole: 'engine-state', platform: 'win32', timeoutMs: 80, intervalMs: 10 });
+  const denied = () => Object.assign(Error('private path'), { code: 'EPERM', errno: -4048, syscall: 'rename' });
+  let blocked = true, written = false;
+  writer.write(() => { if (blocked) throw denied(); written = true; });
+  await delay(20); blocked = false; await writer.flush(); assert.equal(written, true);
+  writer.write(() => { throw denied(); });
+  await assert.rejects(writer.flush(), error => {
+    assert.equal(error.code, 'EPERM'); assert.equal(error.errno, -4048); assert.equal(error.syscall, 'rename');
+    assert.equal(diagnose(error).code, 'PERMISSION_DENIED'); return true;
+  });
+  assert.equal(writer.timer, null); assert.equal(writer.pending, null);
+});
+
+test('permission retries are limited to Windows engine-state rename', async () => {
+  for (const [platform, fileRole, syscall, code] of [
+    ['darwin', 'engine-state', 'rename', 'EPERM'],
+    ['win32', 'setup-log', 'rename', 'EPERM'],
+    ['win32', 'engine-state', 'open', 'EPERM'],
+    ['win32', 'engine-state', 'open', 'EACCES'],
+    ['win32', 'engine-state', 'rename', 'EACCES'],
+  ]) {
+    const writer = new RetryingFileWriter({ fileRole, platform });
+    assert.throws(() => writer.write(() => { throw Object.assign(Error('private'), { code, syscall }); }), { code });
+    await assert.rejects(writer.flush(), { code }); assert.equal(writer.pending, null); assert.equal(writer.timer, null);
+  }
 });

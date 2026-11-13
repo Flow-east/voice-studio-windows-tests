@@ -152,7 +152,7 @@ export class ManagedEngine {
     this.runtimeProfile = this.profile.id;
     this.networkResolver = networkResolver; this.spawnProcess = spawnProcess; this.parentEnv = parentEnv; this.terminateTree = terminateTree; this.signalProcess = signalProcess; this.terminationFailed = false; this.terminationFailure = null;
     this.busy = null; this.child = null; this.controller = null; this.cancelTimer = null; this.lastStateWrite = 0;
-    this.stateWriter = new RetryingFileWriter({ fileRole: 'engine-state', onError: error => this.fileWriteFailure?.(error) });
+    this.stateWriter = new RetryingFileWriter({ fileRole: 'engine-state', platform: this.platform, onError: error => this.fileWriteFailure?.(error) });
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
     if (lstatSync(this.root).isSymbolicLink()) throw Error('引擎目录不能是符号链接');
     const runtime = read(join(this.root, 'runtime-profile.json'));
@@ -295,7 +295,7 @@ export class ManagedEngine {
     };
     const logPath = join(this.root, logName);
     let onWriteFailure;
-    const logWriter = new RetryingFileWriter({ fileRole: 'setup-log', onError: error => onWriteFailure?.(error) });
+    const logWriter = new RetryingFileWriter({ fileRole: 'setup-log', platform: this.platform, onError: error => onWriteFailure?.(error) });
     try {
       await this.stateWriter.flush({ signal: this.controller.signal });
       if (this.controller.signal.aborted) throw Error('准备已取消');

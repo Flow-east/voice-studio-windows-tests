@@ -11,7 +11,7 @@
   "src/files.js": "7fb534b9cfb5eb112bb68081060051f67d8b49c7e425b81b0943d3a02ede83dd",
   "src/index.js": "e54c7067d3c98d704224f7bbd85ffcf208207d05a657333e1a4fab984bd34794",
   "src/installer-config.js": "e6d2bd1be7b24c435a1e9288e40ed259bfd38ec205ebe3435b0b845cb0ef1f38",
-  "src/managed-engine.js": "3e5e5e38fd28edec8992ae2829ad06bcb35fbbc0e67706f6df59f75c3971b2e2",
+  "src/managed-engine.js": "3d7521b98435089282cca18e523e1e2885a02fb71567c393862bd40ab0f46432",
   "src/model-catalog.js": "29b6a9a4b4da8b6bbbcaff85ca295b87bb0813e5146247e2ab97834c54b74c95",
   "src/platform.js": "f7760575ce50f408b0c877f19527fe8e1e0f11ebafa3e8b807a2c31f6f1b9ea9",
   "src/player.js": "f6fe531ec21c57dc769efaa69a9e64b46385d6c5aaa9403cdf357d2209f7df28",
@@ -21,7 +21,7 @@
   "src/qq.js": "335d02b28fa0773fbab82321d17ea7902d7d32b3dfa6eb9ea258b9fff56bd92f",
   "src/reference-library.js": "d495e555c1bea27f725426fd0f49fe1fdc3aa7aa9540d682ac5f014d6629c226",
   "src/reference.js": "4e216ff1b21d2e2fc950f7ab59d06833db5640b53107d25f7cf4efa3b4fa2a7a",
-  "src/retrying-file-writer.js": "350ebd387361890f9beb96d8760dee606f97aa663804f03b3ad74f9a767074e5",
+  "src/retrying-file-writer.js": "6033aca518322b1e3cfb5b24d104187252cc0b1bcda48a86299be890d02a3623",
   "src/runtime-downloads.js": "3668469eaae73b9175a415ff4cebbef6104a0770d53b44cba0b883e1e7dcc1a4",
   "src/singing-reference.js": "8c13ffbb87cfba0d5dd229accec93b11a51d161946976bc26a41a05b9e11aff9",
   "src/song-models.js": "81249ced2eb52c1ef8001a9f85ec684e0a29d80f794d28c7a0827659ba9bf24c",
@@ -30,6 +30,6 @@
   "test/windows-startup.test.js": "c2ee54389515ffd9a5903550537c8e368577cc438800f6b048cdb06f98fdf817",
   "test/managed-engine-callback.test.js": "f13cd90badfaaa96a2e8608f20e91070577c52cdc347911b9d3165e1d395b440",
   "test/managed-engine-busy.test.js": "cd4939907e141f532e33f9f36ed4c4c4753ce223c242b82368fa8a5f603db161",
-  "test/retrying-file-writer.test.js": "a65791555318f8afa90397869309460560bf3d091a60a303abf1d4dcb884d8a9",
-  "test/diagnostics-system.test.js": "9be53b0a5bcda509e1c40337dfe532f1c98beae057fa25e5c547eeaa1fce272c"
+  "test/retrying-file-writer.test.js": "b9f8be8c4b6a28a3dd3e6f1992136830d83147fc49e70f8a66531283457d86bf",
+  "test/diagnostics-system.test.js": "63397eca42a9f73038f2807fdaae45bef9c40cd4b116f2c2340e4e179a4e2e4d"
 }

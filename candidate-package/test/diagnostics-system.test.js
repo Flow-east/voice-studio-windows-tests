@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { diagnose, DiagnosticLog } from '../src/diagnostics.js';
@@ -99,18 +99,31 @@ test('copyable report contains taskkill failure status and confirmation stage, w
 test('export automatically recovers a legacy numeric cause from the matching on-disk log', t => {
   const { root, log } = setup(t);
   mkdirSync(join(root, 'engine-v1'));
-  log.record({ area: 'transcription', code: 'SETUP_STARTED', level: 'info' });
-  writeFileSync(join(root, 'engine-v1/setup-model-asr.log'), finalTrace);
-  log.record({ area: 'transcription', code: 'SETUP_FAILED', setupStep: 'model', error: 'OSError: 模型文件读写失败' });
-  const snapshot = { engine: { transcription: { state: 'failed', setupStep: 'model', failedAt: Date.now(), errorCode: 'PYTHON_EXCEPTION', errorType: 'OSError' } } };
+  // Windows wall-clock and filesystem timestamps need not tick together. Give
+  // the fixture a real, deterministic attempt window rather than relying on
+  // three operations happening within the same millisecond.
+  const startedAt = Date.parse('2026-11-13T13:04:00.000Z'), loggedAt = startedAt + 1000, failedAt = startedAt + 2000;
+  const modelLog = join(root, 'engine-v1/setup-model-asr.log');
+  const setLogTime = time => utimesSync(modelLog, new Date(time), new Date(time));
+  log.record({ time: new Date(startedAt).toISOString(), area: 'transcription', code: 'SETUP_STARTED', level: 'info' });
+  writeFileSync(modelLog, finalTrace); setLogTime(loggedAt);
+  log.record({ time: new Date(failedAt).toISOString(), area: 'transcription', code: 'SETUP_FAILED', setupStep: 'model', error: 'OSError: 模型文件读写失败' });
+  const snapshot = { engine: { transcription: { state: 'failed', setupStep: 'model', failedAt, errorCode: 'PYTHON_EXCEPTION', errorType: 'OSError' } } };
   const report = new DiagnosticLog({ root }).report(snapshot);
   assert.equal(report.summary.models.transcription.error.code, 'FILE_OPERATION_INVALID');
   assert.match(report.text, /errnoNumber=22/);
   assert.doesNotMatch(report.text, /PRIVATE/);
   // A later unrelated operation must never be attributed to this failure.
-  snapshot.engine.transcription.failedAt = Date.now() - 30000;
+  snapshot.engine.transcription.failedAt = startedAt - 30000;
   assert.equal(log.report(snapshot).summary.models.transcription.error.code, 'PYTHON_EXCEPTION');
-  snapshot.engine.transcription.failedAt = Date.now();
+  snapshot.engine.transcription.failedAt = failedAt;
+  // Keep both provenance boundaries strict: neither a previous attempt's log
+  // nor a later overwrite can refine the failure being reported.
+  setLogTime(startedAt - 1000);
+  assert.equal(log.report(snapshot).summary.models.transcription.error.code, 'PYTHON_EXCEPTION');
+  setLogTime(failedAt + 3000);
+  assert.equal(log.report(snapshot).summary.models.transcription.error.code, 'PYTHON_EXCEPTION');
+  setLogTime(loggedAt);
   snapshot.engine.transcription.setupStep = 'dependencies';
   assert.equal(log.report(snapshot).summary.models.transcription.error.code, 'PYTHON_EXCEPTION');
 });
