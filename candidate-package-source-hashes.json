@@ -4,6 +4,7 @@
   "package.json": "a7bc6f3fc9c32f1b1d7a75201eece1ab6aaf1f612b1a209d2c7f9a142a0079d4",
   "runtime/model-files-torch.json": "35a524150f2e5128abcdf5908c8ca479410fd9722d5ccf7e279958c121754b38",
   "runtime/model-files.json": "cc1f92427d57eedf2ed74b6c9d28424e6beab658cde322c056a928d01fe84466",
+  "runtime/model_download.py": "242b56811756239f9832792456851a89d9cbfc1f42602c8daea980cab8a1f8d5",
   "runtime/requirements/asr-windows-x64.lock": "83268b7dd61c8d54cd89364dcec2b97cdedcb53289439b4c76fd5ccbe2ff9a36",
   "runtime/sing.py": "75ea059c405aa143b36339e151b53a9ebe74305f2c538f6024df3f911eef2f80",
   "runtime/torch_reference.py": "e51871b23271cdc70eecb384d5b93b2499aa984f9ec1643ff097a74603ef8905",
