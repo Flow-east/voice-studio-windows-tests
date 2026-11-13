@@ -1,11 +1,11 @@
-name: Windows persistent progress cache regression
+name: Windows downloader ancestor handle reproduction
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  persistent-state-regression:
-    name: Persistent progress cache (${{ matrix.os }})
+  ancestor-handle-repro:
+    name: Downloader ancestor handles (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -18,11 +18,14 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: '24'
+          node-version: '24.21.0'
           package-manager-cache: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11.13'
       - name: Load hash-pinned published baseline
         shell: pwsh
         run: python load_state_baseline.py
-      - name: Verify persistent state sharing conflicts and regressions
+      - name: Hold actual published downloader handles while writing sibling state
         shell: pwsh
-        run: node ci_state_suite.mjs
+        run: node ancestor-lock/reproduce.mjs released-state
