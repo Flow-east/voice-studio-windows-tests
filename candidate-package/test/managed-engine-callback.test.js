@@ -51,7 +51,7 @@ if (mode === 'final-state') options.owner='transcription';
 try { await engine.command(process.execPath,['-e',body],options); }
 catch(error){workError=error;}
 const result={mode,rejected:!!workError,workerClosed,workerAlive:live(worker.pid),terminationFailed:engine.terminationFailed,
- diagnostic:workError?.diagnostic,errno:workError?.errno,errorCode:workError?.code,terminationErrorCode:workError?.terminationErrorCode,childCleared:engine.child===null,stopCleared:engine.stopCommand===null};
+ diagnostic:workError?.diagnostic,secondaryDiagnostic:workError?.secondaryDiagnostic,errno:workError?.errno,errorCode:workError?.code,terminationErrorCode:workError?.terminationErrorCode,childCleared:engine.child===null,stopCleared:engine.stopCommand===null};
 if(result.workerAlive) { worker.kill('SIGKILL'); await new Promise(r=>worker.once('close',r)); }
 result.workerAliveAfterCleanup=live(worker.pid);
 rmSync(root,{recursive:true,force:true});
@@ -70,7 +70,10 @@ for (const mode of ['stdout-log', 'stderr-log', 'activity', 'progress', 'final-p
     assert.equal(result.terminationFailed, false);
     assert.equal(result.childCleared, true);
     assert.equal(result.stopCleared, true);
-    assert.ok(result.diagnostic?.details.some(value => value.startsWith('errnoNumber=')), JSON.stringify(result));
+    if (mode === 'error-log') {
+      assert.equal(result.errorCode, 'PROCESS_EXIT'); assert.ok(result.diagnostic.details.includes('exit=1'));
+      assert.ok(result.secondaryDiagnostic?.details.includes('fileRole=setup-error-log'));
+    } else assert.ok(result.diagnostic?.details.some(value => value.startsWith('errnoNumber=')), JSON.stringify(result));
     if (!mode.endsWith('log')) assert.equal(result.errno, -13);
     assert.doesNotMatch(JSON.stringify(result), /PRIVATE_PATH_OR_INPUT|voice-callback-host-/);
     assert.doesNotMatch(host.stderr, /uncaught|Unhandled|EISDIR/);

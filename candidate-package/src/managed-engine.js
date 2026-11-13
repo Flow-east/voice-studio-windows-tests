@@ -12,6 +12,7 @@ import { platformProfile, UV_DISTRIBUTIONS } from './platform.js';
 import { runtimeToolSources, WINDOWS_PYTHON_MIRROR } from './runtime-downloads.js';
 import { killWindowsProcessTree, privateProcessEnvironment, terminationDetails, windowsSystemExecutable } from './process.js';
 import { writeJson } from './files.js';
+import { RetryingFileWriter, fileOperationError } from './retrying-file-writer.js';
 
 const PACKAGE = fileURLToPath(new URL('..', import.meta.url));
 const ACE_COMMIT = 'ca1e85fe9430179831e6bc6be790c332190a3866';
@@ -151,6 +152,7 @@ export class ManagedEngine {
     this.runtimeProfile = this.profile.id;
     this.networkResolver = networkResolver; this.spawnProcess = spawnProcess; this.parentEnv = parentEnv; this.terminateTree = terminateTree; this.signalProcess = signalProcess; this.terminationFailed = false; this.terminationFailure = null;
     this.busy = null; this.child = null; this.controller = null; this.cancelTimer = null; this.lastStateWrite = 0;
+    this.stateWriter = new RetryingFileWriter({ fileRole: 'engine-state', onError: error => this.fileWriteFailure?.(error) });
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
     if (lstatSync(this.root).isSymbolicLink()) throw Error('引擎目录不能是符号链接');
     const runtime = read(join(this.root, 'runtime-profile.json'));
@@ -241,14 +243,15 @@ export class ManagedEngine {
     for (const kind of affected) next[kind] = { state: 'missing', stage: '所需模型已移除，需要时重新准备' };
     // Storage owns file deletion. This method only resets state after that
     // operation and must not follow or alter external singing model locations.
-    save(join(this.root, 'setup-state.json'), next);
+    try { save(join(this.root, 'setup-state.json'), next); } catch (error) { throw fileOperationError(error, 'engine-state'); }
     this.state = next;
     return { ok: true, models, components: [...affected] };
   }
   persistState(throttled = false) {
     const now = Date.now();
     if (throttled && now - this.lastStateWrite < 1000) return;
-    save(join(this.root, 'setup-state.json'), this.state); this.lastStateWrite = now;
+    const snapshot = JSON.parse(JSON.stringify(this.state));
+    this.stateWriter.write(() => save(join(this.root, 'setup-state.json'), snapshot)); this.lastStateWrite = now;
   }
   update(kind, stage, extra = {}) {
     const now = Date.now(), previous = this.state[kind]?.state === 'preparing' ? this.state[kind].progress : null;
@@ -290,17 +293,25 @@ export class ManagedEngine {
         ...(Number.isInteger(error?.errno) ? { errno: error.errno } : {}), ...terminationDetails(error),
         ...(unsafe ? { code: 'PROCESS_TERMINATION_FAILED', terminationFailed: true } : {}) });
     };
+    const logPath = join(this.root, logName);
+    let onWriteFailure;
+    const logWriter = new RetryingFileWriter({ fileRole: 'setup-log', onError: error => onWriteFailure?.(error) });
+    try {
+      await this.stateWriter.flush({ signal: this.controller.signal });
+      if (this.controller.signal.aborted) throw Error('准备已取消');
+      logWriter.write(() => writeFileSync(logPath, '', { mode: 0o600 }));
+      await logWriter.flush({ signal: this.controller.signal });
+      if (this.controller.signal.aborted) throw Error('准备已取消');
+    } catch (error) { throw safeError(error); }
     return await new Promise((resolveCommand, reject) => {
-      const logPath = join(this.root, logName);
       let child;
       try {
-        writeFileSync(logPath, '', { mode: 0o600 });
         child = this.spawnProcess(executable, args, { env: { ...privateEnv(this.root, this.platform, this.parentEnv), ...network.proxyEnv, ...extraEnv }, cwd: this.root, detached: this.platform !== 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
       } catch (error) { reject(safeError(error, true)); return; }
-      this.child = child; let output = '', timedOut = false, finished = false, killTimer, timer, line = '', dropping = false, terminating = null, closed = false, stoppedTree = false, stopRequested = false, callbackError = null;
+      this.child = child; let output = '', timedOut = false, finished = false, finishing = false, killTimer, timer, line = '', dropping = false, terminating = null, closed = false, stoppedTree = false, stopRequested = false, callbackError = null;
       let resolveStopped; const stopCompletion = new Promise(resolve => { resolveStopped = resolve; });
       const decoder = new StringDecoder('utf8');
-      const collect = bytes => { output = (output + bytes.toString()).slice(-512000); writeFileSync(logPath, output, { mode: 0o600 }); };
+      const collect = bytes => { output = (output + bytes.toString()).slice(-512000); const snapshot = output; logWriter.write(() => writeFileSync(logPath, snapshot, { mode: 0o600 })); };
       const acceptLine = value => {
         if (this.controller.signal.aborted || finished || callbackError || typeof onProgress !== 'function') return;
         const event = modelProgressEvent(value, modelKind); if (event) onProgress(event);
@@ -320,17 +331,20 @@ export class ManagedEngine {
       const failCallback = error => {
         if (finished) return;
         callbackError ??= safeError(error);
+        if (finishing) return;
         if (closed) finish(callbackError); else stop();
       };
+      onWriteFailure = failCallback; this.fileWriteFailure = failCallback;
       const protect = callback => (...values) => {
-        if (finished || callbackError) return;
+        if (finished || finishing || callbackError) return;
         try { callback(...values); } catch (error) { failCallback(error); }
       };
       const collectStdout = protect(bytes => { collect(bytes); if (typeof onProgress === 'function') parse(decoder.write(bytes)); else this.activity(owner); });
       const collectStderr = protect(bytes => { collect(bytes); if (!modelKind && typeof onProgress !== 'function') this.activity(owner); });
       child.stdout?.on('data', collectStdout); child.stderr?.on('data', collectStderr);
-      const finish = (error) => {
-        if (finished) return;
+      const finish = async (error) => {
+        if (finished || finishing) return;
+        finishing = true; clearTimeout(timer); clearTimeout(killTimer);
         error ??= callbackError;
         if (!error && typeof onProgress === 'function') {
           try { parse(decoder.end()); if (line && !dropping) acceptLine(line); }
@@ -341,11 +355,17 @@ export class ManagedEngine {
         if (owner && this.state[owner]?.state === 'preparing') {
           try { this.persistState(); } catch (failure) { error ??= safeError(failure); }
         }
+        // Await both bounded writers even when the worker already failed. No
+        // timer or stale snapshot may survive command settlement into a retry.
+        const writes = await Promise.allSettled([logWriter.flush({ signal: this.controller.signal }), this.stateWriter.flush({ signal: this.controller.signal })]);
+        for (const result of writes) if (result.status === 'rejected') error ??= safeError(result.reason);
+        error ??= callbackError;
+        if (!error && this.controller.signal.aborted) error = cancelledError();
         finished = true; line = ''; dropping = false; clearTimeout(timer); clearTimeout(killTimer);
         child.stdout?.removeListener('data', collectStdout); child.stderr?.removeListener('data', collectStderr);
         child.stdout?.resume(); child.stderr?.resume();
         if (this.child === child) { this.child = null; clearTimeout(this.cancelTimer); this.cancelTimer = null; }
-        this.stopCommand = null;
+        this.stopCommand = null; this.fileWriteFailure = null;
         resolveStopped();
         if (error) reject(error); else resolveCommand(capture ? output : '');
       };
@@ -361,7 +381,7 @@ export class ManagedEngine {
       };
       const stop = () => {
         stopRequested = true;
-        if (finished || terminating) return stopCompletion;
+        if (finished || finishing || closed || terminating) return stopCompletion;
         // A failed spawn reports error asynchronously; it has no tree to kill.
         if (!Number.isSafeInteger(child.pid) || child.pid <= 0) return stopCompletion;
         terminating = true;
@@ -417,8 +437,10 @@ export class ManagedEngine {
           if (code !== 0) {
             const diagnostic = diagnose(output, { code });
             const error = Object.assign(Error(diagnostic.message), { code: diagnostic.code, diagnostic });
+            // The primary worker failure remains authoritative if writing its
+            // secondary convenience copy fails. The main log has its own flush.
             try { writeFileSync(join(this.root, 'setup-error.log'), output, { mode: 0o600 }); }
-            catch (failure) { return finish(safeError(failure)); }
+            catch (failure) { error.secondaryDiagnostic = diagnose(fileOperationError(failure, 'setup-error-log')); }
             return finish(error);
           }
           finish();
@@ -603,10 +625,14 @@ export class ManagedEngine {
     if (!this.profile.supported) return Promise.reject(Error(this.profile.unsupportedReason));
     if (this.terminationFailed) return Promise.reject(Object.assign(Error('后台程序未能停止，请完全退出并重新打开 Coopanion 后重试。'), { code: 'PROCESS_TERMINATION_FAILED', terminationFailed: true, ...this.terminationFailure }));
     if (this.ready(kind)) return Promise.resolve(this.status());
-    this.controller = new AbortController(); this.update(kind, '正在检查本机环境', { progress: { setupStep: 'verification' } });
-    const promise = (async () => {
+    this.controller = new AbortController();
+    const promise = Promise.resolve().then(async () => {
       let primaryError;
       try {
+        this.stateWriter.reset();
+        this.update(kind, '正在检查本机环境', { progress: { setupStep: 'verification' } });
+        await this.stateWriter.flush({ signal: this.controller.signal });
+        if (this.controller.signal.aborted) throw Error('准备已取消');
         if (kind === 'singing') await this.singing();
         else {
           await this.speechEnv(kind);
@@ -632,7 +658,15 @@ export class ManagedEngine {
         const failureProgress = !cancelled ? failureProgressSnapshot(progress) : undefined;
         this.state[kind] = { state: cancelled ? 'missing' : 'failed', stage: cancelled ? '准备已取消' : this.terminationFailed ? '后台程序未能停止，请完全退出 Coopanion' : '准备未完成', error: diagnostic.message, errorCode: diagnostic.code, errorDetails: diagnostic.details, errorType: diagnostic.errorType, ...(setupStep ? { setupStep } : {}), ...(!cancelled ? { failedAt: Date.now() } : {}), ...(failureProgress ? { failureProgress } : {}), ...(component ? { component } : {}), ...provenance }; throw error;
       } finally {
-        try { save(join(this.root, 'setup-state.json'), this.state); }
+        try {
+          // The previous command has drained its writer. Retry the final
+          // snapshot independently, so an earlier progress failure cannot
+          // poison every future explicit preparation attempt.
+          try { await this.stateWriter.flush(); } catch (error) { if (!primaryError) throw error; }
+          this.stateWriter.reset();
+          this.persistState();
+          await this.stateWriter.flush();
+        }
         catch (error) {
           // A second persistence failure must not replace the worker's original
           // error, especially an unconfirmed stop, or strand the busy latch.
@@ -643,12 +677,13 @@ export class ManagedEngine {
           }
         } finally { this.busy = null; this.child = null; }
       }
-    })();
+    });
     this.busy = { kind, promise }; return promise;
   }
   async cancelPrepare() {
     this.controller?.abort();
     await this.stopCommand?.();
+    await this.busy?.promise.catch(() => {});
     if (this.terminationFailed) throw Object.assign(Error('后台程序未能停止，请完全退出并重新打开 Coopanion 后重试。'), { code: 'PROCESS_TERMINATION_FAILED', terminationFailed: true, ...this.terminationFailure });
   }
 }

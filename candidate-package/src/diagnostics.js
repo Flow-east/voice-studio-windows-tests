@@ -2,7 +2,7 @@ import { constants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readSy
 import { join, relative, resolve, sep, isAbsolute } from 'node:path';
 import { arch, platform, release } from 'node:os';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
-import { safeContextDetail, processContextDetails, runtimeContextDetails, numericSystemDetails, systemFailureCode } from './diagnostic-context.js';
+import { SYSTEM_ERRNOS, safeContextDetail, processContextDetails, runtimeContextDetails, numericSystemDetails, systemFailureCode } from './diagnostic-context.js';
 
 const MAX_ENTRIES = 200, STORE_BYTES = 128 * 1024, LOG_BYTES = 2 * 1024 * 1024, TAIL_BYTES = 48 * 1024;
 const JOB_ID = /^(?:reference-)?\d{13}-[a-f0-9]{8}$/;
@@ -53,7 +53,8 @@ const CATALOG = {
   PROCESS_EXIT: ['运行程序异常退出', '查看异常类型或组件信息；重试仍失败时复制报告反馈。'],
   PERMISSION_DENIED: ['文件或系统访问被拒绝', '检查系统提示的文件访问权限，允许后重试。'],
   FILE_MISSING: ['所需文件不存在', '在对应功能页重新准备模型或重新选择录音。'],
-  FILE_IN_USE: ['模型文件访问发生共享冲突', '保留已下载文件并更新插件后重试；共享冲突也可能来自程序自身，不能仅凭此错误认定是其他软件占用。'],
+  FILE_IN_USE: ['文件访问发生占用或共享冲突', '保留已下载文件并更新插件后重试；共享冲突也可能来自程序自身，不能仅凭此错误认定是其他软件占用。'],
+  RESOURCE_BUSY: ['系统资源访问发生占用或共享冲突', '报告已保留系统错误码；仅凭该错误不能确定占用方或具体文件，无需删除模型缓存。'],
   PATH_TOO_LONG: ['模型文件路径超过系统限制', '将插件数据目录移至较短的本地路径后重试。'],
   FILE_OPERATION_INVALID: ['模型文件操作被系统拒绝：参数或路径无效', '本报告已记录系统错误码和失败操作，反馈作者定位 Windows 兼容问题。'],
   FILESYSTEM_UNSUPPORTED: ['模型目录不支持当前文件操作', '本报告已记录失败操作；使用本机磁盘目录后重试。'],
@@ -115,9 +116,11 @@ const safeSetupStep = value => typeof value === 'string' && Object.hasOwn(SETUP_
 const DETAIL_PATTERN = new RegExp(`^(?:exception=(?:${EXCEPTIONS.join('|')})|errno=(?:EACCES|EPERM|ENOENT|ENOSPC|ETIMEDOUT|ECONNREFUSED|ENOTFOUND|ENOMEM|EIO)|http=[45]\\d{2}|curl=\\d{1,2}|exit=-?\\d{1,3}|signal=SIG(?:TERM|KILL|ABRT|SEGV|BUS)|media=[1-4]|module=(?:${MODULES.join('|')})|frame=(?:${RUNTIME_FILES.map(name => name.replaceAll('.', '\\.')).join('|')}):\\d{1,5})$`);
 const safeDetails = value => Array.isArray(value) ? [...new Set(value.filter(item => typeof item === 'string' && (DETAIL_PATTERN.test(item) || safeContextDetail(item))))].slice(0, 32) : [];
 function safeDiagnostic(value) {
-  const code = codeOf(value?.code);
+  let code = codeOf(value?.code);
   if (!code) return undefined;
-  return { code, message: CATALOG[code][0], advice: CATALOG[code][1], details: safeDetails(value.details),
+  const details = safeDetails(value.details);
+  if (['UNKNOWN', 'PYTHON_EXCEPTION'].includes(code)) code = systemFailureCode(details) ?? code;
+  return { code, message: CATALOG[code][0], advice: CATALOG[code][1], details,
     errorType: EXCEPTIONS.includes(value.errorType) || ERROR_TYPES.includes(value.errorType) ? value.errorType : 'Error',
     ...(safeSetupStep(value.setupStep) ? { setupStep: value.setupStep } : {}),
     ...(code === 'UNKNOWN' && typeof value.fingerprint === 'string' && /^[a-f0-9]{20}$/.test(value.fingerprint) ? { fingerprint: value.fingerprint } : {}) };
@@ -148,9 +151,9 @@ function signatureDetails(text, result) {
   const details = [];
   for (const name of exceptionNames(text)) details.push(`exception=${name}`);
   details.push(...runtimeContextDetails(text, EXCEPTIONS), ...numericSystemDetails(text), ...processContextDetails(result));
-  const errno = text.match(/\b(EACCES|EPERM|ENOENT|ENOSPC|ETIMEDOUT|ECONNREFUSED|ENOTFOUND|ENOMEM|EIO)\b/);
+  const errno = text.match(new RegExp(`\\b(${[...SYSTEM_ERRNOS].join('|')})\\b`));
   if (errno) details.push(`errno=${errno[1]}`);
-  if (/^(EACCES|EPERM|ENOENT|ENOSPC|ETIMEDOUT|ECONNREFUSED|ENOTFOUND|ENOMEM|EIO)$/.test(result?.errorCode ?? '') && !details.includes(`errno=${result.errorCode}`)) details.push(`errno=${result.errorCode}`);
+  if (SYSTEM_ERRNOS.has(result?.errorCode) && !details.includes(`errno=${result.errorCode}`)) details.push(`errno=${result.errorCode}`);
   const http = [...text.matchAll(/(?:HTTP(?:Error)?(?:\/\d(?:\.\d)?)?(?:\s+Error)?\s*:?\s*|status(?:\s+code)?\s*[:=]?\s*|returned error:\s*)([45]\d{2})\b|\b([45]\d{2})\s+(?:Client|Server)\s+Error\b/gi)].at(-1);
   if (http) details.push(`http=${http[1] ?? http[2]}`);
   const curl = text.match(/curl:\s*\((\d{1,2})\)/); if (curl) details.push(`curl=${Number(curl[1])}`);
@@ -172,9 +175,12 @@ export function diagnose(error, result, fingerprintKey = SESSION_FINGERPRINT_KEY
   const setupStep = safeSetupStep(error?.setupStep) ?? safeSetupStep(error?.diagnostic?.setupStep);
   if (structured) {
     const stopped = result?.terminationFailed || error?.terminationFailed;
-    return { ...structured, ...(stopped ? { code: 'PROCESS_TERMINATION_FAILED', message: CATALOG.PROCESS_TERMINATION_FAILED[0], advice: CATALOG.PROCESS_TERMINATION_FAILED[1] } : {}), ...(setupStep ? { setupStep } : {}), details: safeDetails([...processContextDetails(error, result), ...signatureDetails('', result), ...structured.details]) };
+    const details = safeDetails([...processContextDetails(error, result), ...signatureDetails('', result), ...structured.details]);
+    const code = stopped ? 'PROCESS_TERMINATION_FAILED' : ['UNKNOWN', 'PYTHON_EXCEPTION', 'RESOURCE_BUSY'].includes(structured.code) ? systemFailureCode(details) ?? structured.code : structured.code;
+    return { ...structured, code, message: CATALOG[code][0], advice: CATALOG[code][1], ...(setupStep ? { setupStep } : {}), details,
+      ...(code !== 'UNKNOWN' ? { fingerprint: undefined } : {}) };
   }
-  const text = inputText(error) + (/^(EACCES|EPERM|ENOENT|ENOSPC|ETIMEDOUT|ECONNREFUSED|ENOTFOUND|ENOMEM|EIO)$/.test(result?.errorCode ?? '') ? '\n' + result.errorCode : '');
+  const text = inputText(error) + (SYSTEM_ERRNOS.has(result?.errorCode) ? '\n' + result.errorCode : '');
   const chain = exceptionChain(text), terminal = chain.at(-1) ?? text;
   let details = safeDetails([...signatureDetails(terminal, result), ...processContextDetails(error)]), inferred = classifyText(terminal, details);
   const terminalType = exceptionNames(terminal)[0];
@@ -279,6 +285,14 @@ function fromDisk(entry) {
   if (EXCEPTIONS.includes(entry.errorType) || ERROR_TYPES.includes(entry.errorType)) e.errorType = entry.errorType;
   else delete e.errorType;
   e.details = safeDetails(entry.details);
+  // Existing reports may retain a native code even if an older classifier called
+  // it UNKNOWN. Refine that saved evidence without asking for another raw log.
+  const systemCode = systemFailureCode(e.details);
+  if (systemCode && ['UNKNOWN', 'PYTHON_EXCEPTION'].includes(e.code)) {
+    e.code = systemCode; e.message = CATALOG[systemCode][0]; e.advice = CATALOG[systemCode][1]; delete e.fingerprint;
+  } else if (systemCode && ['SETUP_FAILED', 'JOB_FAILED'].includes(e.code) && (!e.cause || ['UNKNOWN', 'PYTHON_EXCEPTION'].includes(e.cause.code))) {
+    e.cause = { code: systemCode, message: CATALOG[systemCode][0] }; e.advice = CATALOG[systemCode][1]; delete e.fingerprint;
+  }
   return e;
 }
 

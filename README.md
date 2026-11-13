@@ -4,7 +4,22 @@ This owner-authorized public repository contains synthetic tests and candidate
 plugin source. It contains no user reports, recordings, credentials, model
 weights, or personal filesystem paths.
 
-## Current 0.2.4 startup recovery candidate
+## Current file-sharing recovery candidate (unpublished)
+
+The `windows-busy.yml` manual workflow compares the hash-pinned public 0.2.4
+archive with a candidate that retries temporary setup-log and progress-state
+sharing conflicts without blocking the host event loop. Separate PowerShell
+processes hold real exclusive Windows file handles. Tests check both transient
+recovery and persistent failures, including actual output/state persistence,
+bounded completion, safe diagnostic context, child shutdown and preserved
+synthetic cache bytes. The startup/crash-containment and diagnostic tests also
+run against the exact candidate hashes.
+
+These are controlled native Windows Server 2022/2025 tests. They do not identify
+the file or locking process in any particular user's Windows 10 installation.
+No model weights are downloaded and no inference or deployment occurs.
+
+## Previous 0.2.4 startup recovery verification
 
 The current manual workflow runs on standard Windows Server 2022/2025 with Node
 24. It loads the hash-pinned public 0.2.3 archive without install scripts and

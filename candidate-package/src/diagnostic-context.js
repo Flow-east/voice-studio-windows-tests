@@ -8,6 +8,13 @@ const SIGNALS = new Set('SIGHUP SIGINT SIGQUIT SIGABRT SIGKILL SIGSEGV SIGPIPE S
 const STOP_ERRORS = new Set('EACCES EPERM ESRCH ENOENT EINVAL EIO ENOMEM ENOSPC ENOSYS EAGAIN EMFILE ENFILE INVALID_PROCESS_ID WINDOWS_SYSTEMROOT_MISSING TASKKILL_START_FAILED TASKKILL_NONZERO_EXIT TASKKILL_TIMEOUT PROCESS_SIGNAL_FAILED PROCESS_EXIT_NOT_CONFIRMED PROCESS_TERMINATION_ERROR REFERENCE_KILL_FAILED REFERENCE_KILL_TIMEOUT PROCESS_TERMINATION_FAILED'.split(' '));
 for (const code of ['WINDOWS_JOB_START_FAILED', 'WINDOWS_JOB_STOP_FAILED', 'WINDOWS_JOB_UNCONFIRMED', 'WINDOWS_JOB_TIMEOUT', 'WINDOWS_JOB_PROTOCOL_INVALID']) STOP_ERRORS.add(code);
 const JOB_OPERATIONS = new Set('parse_spec open_stdio create_job configure_job create_process resume_process query_job terminate_job wait_job read_control supervisor'.split(' '));
+export const SYSTEM_ERRNOS = new Set('EACCES EPERM ENOENT ENOSPC ETIMEDOUT ECONNREFUSED ENOTFOUND ENOMEM EIO EBUSY ETXTBSY EEXIST EISDIR ENOTDIR ENAMETOOLONG EINVAL EROFS ENOTSUP ENOSYS EMFILE ENFILE EBADF ENODEV ENXIO EPIPE ECONNRESET ECONNABORTED ENETUNREACH EHOSTUNREACH EAGAIN ECANCELED'.split(' '));
+const FILE_SYSCALLS = new Set('open read write rename unlink rmdir mkdir stat lstat realpath access chmod close fstat fsync fdatasync copyfile scandir truncate ftruncate link symlink readlink'.split(' '));
+// read/write/close can name a pipe operation too; only a path-oriented call or
+// an explicit internal file role establishes that a busy resource is a file.
+const FILE_PATH_SYSCALLS = new Set('open rename unlink rmdir mkdir stat lstat realpath access chmod copyfile scandir truncate link symlink readlink'.split(' '));
+const NODE_SYSCALLS = new Set([...FILE_SYSCALLS, 'spawn', 'kill', 'uv_pipe_open', 'connect', 'getaddrinfo']);
+const FILE_ROLES = new Set('setup-log setup-error-log engine-state diagnostic-store setup-preferences model-file runtime-file'.split(' '));
 const integer = (value, low, high) => Number.isInteger(value) && value >= low && value <= high;
 const INT_MIN = -2147483648, UINT_MAX = 4294967295;
 const version = value => typeof value === 'string' && /^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(value);
@@ -20,6 +27,9 @@ export function safeContextDetail(detail) {
     return /^-?(?:0|[1-9]\d{0,9})$/.test(value) && integer(Number(value), name === 'winerror' ? 0 : INT_MIN, name === 'errnoNumber' ? 2147483647 : UINT_MAX);
   }
   if (name === 'ntstatus') return /^0x[0-9A-F]{8}$/.test(value);
+  if (name === 'errno') return SYSTEM_ERRNOS.has(value);
+  if (name === 'syscall') return NODE_SYSCALLS.has(value);
+  if (name === 'fileRole') return FILE_ROLES.has(value);
   if (name === 'operation') return OPERATIONS.has(value);
   if (name === 'phase') return PHASES.has(value);
   if (name === 'python') return version(value);
@@ -39,6 +49,11 @@ export function processContextDetails(...sources) {
   const details = [];
   for (const source of sources) {
     if (!source || typeof source !== 'object') continue;
+    const systemCode = SYSTEM_ERRNOS.has(source.code) ? source.code : SYSTEM_ERRNOS.has(source.errorCode) ? source.errorCode : undefined;
+    if (systemCode) details.push(`errno=${systemCode}`);
+    for (const key of ['syscall', 'fileRole']) {
+      if (typeof source[key] === 'string' && safeContextDetail(`${key}=${source[key]}`)) details.push(`${key}=${source[key]}`);
+    }
     for (const key of ['terminationMethod', 'terminationStage', 'terminationErrorCode', 'terminationExitCode', 'terminationSignal', 'terminationOperation']) {
       const value = source[key];
       if ((typeof value === 'string' || typeof value === 'number') && safeContextDetail(`${key}=${value}`)) details.push(`${key}=${value}`);
@@ -102,6 +117,22 @@ export function systemFailureCode(details) {
   if (winerror === 206) return 'PATH_TOO_LONG';
   if ([87, 123, 161].includes(winerror)) return 'FILE_OPERATION_INVALID';
   if ([1, 50].includes(winerror)) return 'FILESYSTEM_UNSUPPORTED';
+  const systemCode = details.find(item => item.startsWith('errno='))?.slice('errno='.length);
+  // libuv uses a platform-independent fallback number on Windows. In particular,
+  // UV_EBUSY (-4082) can mean a sharing/lock violation OR a busy pipe; do not label
+  // the resource as a model file without a known filesystem call or file role.
+  // https://github.com/libuv/libuv/blob/v1.51.0/include/uv/errno.h
+  if (['EBUSY', 'ETXTBSY'].includes(systemCode) || errno === -4082) {
+    return details.some(item => item.startsWith('fileRole=') || item.startsWith('syscall=') && FILE_PATH_SYSCALLS.has(item.slice('syscall='.length))) ? 'FILE_IN_USE' : 'RESOURCE_BUSY';
+  }
+  if (['EACCES', 'EPERM', 'EROFS'].includes(systemCode)) return 'PERMISSION_DENIED';
+  if (systemCode === 'ENOSPC') return 'DISK_FULL';
+  if (systemCode === 'ENOMEM') return 'MEMORY_EXHAUSTED';
+  if (systemCode === 'ENOENT') return 'FILE_MISSING';
+  if (systemCode === 'ENAMETOOLONG') return 'PATH_TOO_LONG';
+  if (['EINVAL', 'EISDIR', 'ENOTDIR', 'EBADF'].includes(systemCode)) return 'FILE_OPERATION_INVALID';
+  if (['ENOTSUP', 'ENOSYS'].includes(systemCode)) return 'FILESYSTEM_UNSUPPORTED';
+  if (systemCode === 'EIO') return 'FILE_IO_FAILED';
   if ([1, 13].includes(errno)) return 'PERMISSION_DENIED';
   if (errno === 28) return 'DISK_FULL';
   if (errno === 12) return 'MEMORY_EXHAUSTED';
